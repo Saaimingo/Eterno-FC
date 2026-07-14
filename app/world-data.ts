@@ -145,7 +145,8 @@ export const CLUB_SEEDS: ClubSeed[] = [
 ];
 
 export const STATE_NAMES: Record<string,string> = {
-  SC:"Campeonato Catarinense", BA:"Campeonato Baiano", SE:"Campeonato Sergipano", SP:"Campeonato Paulista",
-  RJ:"Campeonato Carioca", RS:"Campeonato Gaúcho", PE:"Campeonato Pernambucano", PA:"Campeonato Paraense",
-  PR:"Campeonato Paranaense", CE:"Campeonato Cearense", MG:"Campeonato Mineiro",
+  AC:"Campeonato Acreano",AL:"Campeonato Alagoano",AP:"Campeonato Amapaense",AM:"Campeonato Amazonense",BA:"Campeonato Baiano",CE:"Campeonato Cearense",DF:"Campeonato Brasiliense",
+  ES:"Campeonato Capixaba",GO:"Campeonato Goiano",MA:"Campeonato Maranhense",MT:"Campeonato Mato-Grossense",MS:"Campeonato Sul-Mato-Grossense",MG:"Campeonato Mineiro",PA:"Campeonato Paraense",
+  PB:"Campeonato Paraibano",PR:"Campeonato Paranaense",PE:"Campeonato Pernambucano",PI:"Campeonato Piauiense",RJ:"Campeonato Carioca",RN:"Campeonato Potiguar",RS:"Campeonato Gaúcho",
+  RO:"Campeonato Rondoniense",RR:"Campeonato Roraimense",SC:"Campeonato Catarinense",SP:"Campeonato Paulista",SE:"Campeonato Sergipano",TO:"Campeonato Tocantinense",
 };
