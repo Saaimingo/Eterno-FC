@@ -8,6 +8,7 @@ let career=game.createNewGame("Adilson Simon","vitoria","Teste de longo prazo");
 
 assert.equal(career.competitions.find((competition)=>competition.id==="BRA-B")?.participantIds.length,20);
 assert.equal(career.competitions.find((competition)=>competition.id==="BRA-D")?.participantIds.length,96);
+assert.equal(career.competitions.find((competition)=>competition.id==="COPA-BR")?.participantIds.length,126);
 
 for(let index=0;index<4;index+=1){
   const previous=new Map(career.clubs.map((club)=>[club.id,club.divisionId]));
