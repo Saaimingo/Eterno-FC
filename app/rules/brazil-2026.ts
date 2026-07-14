@@ -1,4 +1,5 @@
 import type { Club } from "../domain/types";
+import type { LeagueTransitionRule } from "./league-transitions";
 
 export type BrazilianDivisionId = "BRA-A" | "BRA-B" | "BRA-C" | "BRA-D";
 
@@ -85,6 +86,14 @@ export const BRAZIL_2026 = {
 
 export function brazilianDivisionSchedule(divisionId: string) {
   return BRAZIL_2026.divisions[divisionId as BrazilianDivisionId];
+}
+
+export function brazilianTransitionRules(): LeagueTransitionRule[] {
+  return [
+    { upper: "BRA-A", lower: "BRA-B", relegated: BRAZIL_2026.transitions["BRA-A"].count, promoted: BRAZIL_2026.transitions["BRA-B"].promotedCount },
+    { upper: "BRA-B", lower: "BRA-C", relegated: BRAZIL_2026.transitions["BRA-B"].count, promoted: BRAZIL_2026.transitions["BRA-C"].promotedCount },
+    { upper: "BRA-C", lower: "BRA-D", relegated: BRAZIL_2026.transitions["BRA-C"].count, promoted: BRAZIL_2026.transitions["BRA-D"].promotedCount },
+  ];
 }
 
 export function regionalEligibleClubs(clubs: Club[], stateCodes: readonly string[], continentalClubIds: ReadonlySet<string>) {
