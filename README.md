@@ -15,6 +15,7 @@ O trabalho em curso está transformando o protótipo em uma base modular, com re
 ```text
 app/
   domain/     tipos e regras fundamentais do domínio
+  match-engine/ novo núcleo causal e determinístico (MP-0/MP-1)
   rules/      calendários e regulamentos por temporada
   game.ts     fachada temporária do motor em processo de divisão
   page.tsx    interface web do jogo
@@ -29,6 +30,7 @@ tests/        validações automatizadas
 - [Matriz brasileira de regulamentos 2026](docs/brasil-matriz-regulamentos-2026.md)
 - [Matriz CONMEBOL](docs/conmebol-matriz-regulamentos-2026.md)
 - [Matriz UEFA](docs/uefa-matriz-regulamentos-2026-27.md)
+- [Relatório e calibração do motor MP-0/MP-1](docs/match-engine-mp1-calibration.md)
 
 As demais matrizes de países estão em `docs/`.
 
