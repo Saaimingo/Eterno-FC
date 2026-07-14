@@ -55,6 +55,8 @@ export type Player = {
 
 export type Fixture = {
   id: string;
+  tieId?: string;
+  leg?: 1 | 2;
   competitionId: string;
   stage: string;
   round: number;
@@ -90,6 +92,7 @@ export type Competition = {
   pendingByes: string[];
   nextRoundDate: string;
   championId?: string;
+  promotedClubIds?: string[];
   complete: boolean;
   divisionId?: string;
   stateCode?: string;
