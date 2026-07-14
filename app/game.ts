@@ -6,6 +6,7 @@ import { divisionShortfall, resolveLeagueTransitions, type LeagueTransitionRule 
 import { buildTwoLeggedTies, resolveTwoLeggedTies } from "./rules/two-legged-ties";
 import { BRAZIL_CUP_2026_FORMAT, selectBrazilCupEntrants } from "./rules/brazil-cup-2026";
 import { REGIONAL_CUP_FORMATS_2026 } from "./rules/regional-cups-2026";
+import { BRAZIL_SUPER_CUP_2026, resolveSuperCupParticipants } from "./rules/super-cup";
 import type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, Intensity, JobVacancy, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
 
 export type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, IncomingBid, Intensity, JobVacancy, League, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
@@ -140,7 +141,7 @@ function stageName(teamCount: number, preliminary = false) {
 
 function cupOpening(competition: Competition, clubs: Club[], date: string): Fixture[] {
   const sorted=[...competition.participantIds].sort((a,b)=>(clubs.find((club)=>club.id===b)?.reputation??0)-(clubs.find((club)=>club.id===a)?.reputation??0));
-  const power=2**Math.floor(Math.log2(sorted.length)); const byes=Math.max(0,2*power-sorted.length); competition.pendingByes=sorted.slice(0,byes);
+  const lowerPower=2**Math.floor(Math.log2(sorted.length)); const bracketSize=lowerPower===sorted.length?lowerPower:lowerPower*2;const byes=Math.max(0,bracketSize-sorted.length); competition.pendingByes=sorted.slice(0,byes);
   const playing=sorted.slice(byes); competition.currentStage=stageName(playing.length,byes>0); competition.nextRoundDate=datePlusDays(date,24);
   const random=seededRandom(`${competition.id}-${competition.season}-draw`); const shuffled=[...playing].sort(()=>random()-.5);
   return Array.from({length:shuffled.length/2},(_,index)=>({id:`${competition.id}-${competition.season}-s0-${index+1}`,competitionId:competition.id,stage:competition.currentStage,round:1,date,homeId:shuffled[index*2],awayId:shuffled[index*2+1],played:false,homeGoals:null,awayGoals:null}));
@@ -152,7 +153,7 @@ function makeCompetition(id:string,name:string,short:string,type:CompetitionType
   return {id,name,short,type,country,season,participantIds,currentStage:type==="league"||type==="state"?"Liga":"",pendingByes:[],promotedClubIds:[],nextRoundDate:date,complete:false};
 }
 
-type SeasonQualification = { brazilPrimary: string[]; brazilSecondary: string[]; argentinaPrimary: string[]; argentinaSecondary: string[]; spainPrimary: string[]; italyPrimary: string[]; brazilCupProtected: string[] };
+type SeasonQualification = { brazilPrimary: string[]; brazilSecondary: string[]; argentinaPrimary: string[]; argentinaSecondary: string[]; spainPrimary: string[]; italyPrimary: string[]; brazilCupProtected: string[]; brazilLeagueChampion: string; brazilLeagueRunnerUp: string; brazilCupChampion: string };
 
 function buildSeason(clubs: Club[], season: number, qualification?: SeasonQualification) {
   const competitions:Competition[]=[]; const fixtures:Fixture[]=[];
@@ -178,6 +179,11 @@ function buildSeason(clubs: Club[], season: number, qualification?: SeasonQualif
   const spainPrimary=qualification?.spainPrimary??ranked("ESP-1").slice(0,8),italyPrimary=qualification?.italyPrimary??ranked("ITA-1").slice(0,8);
   const brazilTop=brazilPrimary.map((id)=>clubs.find((club)=>club.id===id)).filter((club):club is Club=>Boolean(club));
   const continentalBrazilianClubIds=new Set(brazilTop.slice(0,8).map((club)=>club.id));
+  const superCupParticipants=resolveSuperCupParticipants({
+    leagueChampionId:qualification?.brazilLeagueChampion??ranked("BRA-A")[0],
+    leagueRunnerUpId:qualification?.brazilLeagueRunnerUp??ranked("BRA-A")[1],
+    cupChampionId:qualification?.brazilCupChampion??ranked("BRA-A")[2],
+  });
   const regionalCups= BRAZIL_2026.regionals
     .map((rule)=>{
       const participants=regionalEligibleClubs(clubs,rule.stateCodes,continentalBrazilianClubIds).slice(0,rule.expectedParticipants).map((club)=>club.id);
@@ -187,6 +193,7 @@ function buildSeason(clubs: Club[], season: number, qualification?: SeasonQualif
   const brazilCupSelection=selectBrazilCupEntrants(clubs.filter((club)=>club.country==="Brasil"),qualification?.brazilCupProtected),brazilCup={...makeCompetition(BRAZIL_2026.nationalCup.id,BRAZIL_2026.nationalCup.name,BRAZIL_2026.nationalCup.short,"cup","Brasil",season,brazilCupSelection.all,dateForSeason(season,BRAZIL_2026.nationalCup.openingDate)),formatId:"brazil-cup-2026" as const,currentStage:"1ª fase",entryWaves:{"2ª fase":brazilCupSelection.secondPhase,"3ª fase":brazilCupSelection.thirdPhase,"5ª fase":brazilCupSelection.fifthPhase}};
   const cup = SEASON_2026.cups;
   const cups:Competition[]=[
+    {...makeCompetition(BRAZIL_SUPER_CUP_2026.id,BRAZIL_SUPER_CUP_2026.name,BRAZIL_SUPER_CUP_2026.short,"cup","Brasil",season,[...superCupParticipants],dateForSeason(season,BRAZIL_SUPER_CUP_2026.matchDate)),prizeMoney:{champion:BRAZIL_SUPER_CUP_2026.championPrize,runnerUp:BRAZIL_SUPER_CUP_2026.runnerUpPrize}},
     ...regionalCups,
     brazilCup,
     makeCompetition(cup.spain.id,cup.spain.name,cup.spain.short,"cup","Espanha",season,spain,dateForSeason(season,cup.spain.openingDate)),
@@ -444,7 +451,7 @@ function qualificationFromSeason(game:GameState,tables: Map<string,Standing[]>):
   const ranked=(leagueId:string)=>tables.get(leagueId)?.map((row)=>row.clubId)??[];
   const brazil=ranked("BRA-A"),argentina=ranked("ARG-1"),spain=ranked("ESP-1"),italy=ranked("ITA-1");
   const champions=[ranked("BRA-C")[0],game.competitions.find((competition)=>competition.id==="BRA-D")?.championId,game.competitions.find((competition)=>competition.id==="REGIONAL-NE")?.championId,game.competitions.find((competition)=>competition.id==="REGIONAL-NCO")?.championId].filter((id):id is string=>Boolean(id));
-  return {brazilPrimary:brazil.slice(0,8),brazilSecondary:brazil.slice(8,16),argentinaPrimary:argentina.slice(0,8),argentinaSecondary:argentina.slice(8,16),spainPrimary:spain.slice(0,8),italyPrimary:italy.slice(0,8),brazilCupProtected:[...new Set(champions)].slice(0,4)};
+  return {brazilPrimary:brazil.slice(0,8),brazilSecondary:brazil.slice(8,16),argentinaPrimary:argentina.slice(0,8),argentinaSecondary:argentina.slice(8,16),spainPrimary:spain.slice(0,8),italyPrimary:italy.slice(0,8),brazilCupProtected:[...new Set(champions)].slice(0,4),brazilLeagueChampion:brazil[0],brazilLeagueRunnerUp:brazil[1],brazilCupChampion:game.competitions.find((competition)=>competition.id==="COPA-BR")?.championId??brazil[2]};
 }
 
 function seasonFinancialPlan(club: Club, currentLevel: number, nextLevel: number, position: number) {
