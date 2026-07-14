@@ -96,6 +96,8 @@ export type Competition = {
   formatId?: "brazil-cup-2026" | "regional-cup-2026";
   entryWaves?: Record<string,string[]>;
   groups?: Record<string,string[]>;
+  groupStage?: string;
+  groupAdvancing?: number;
   prizeMoney?: { champion: number; runnerUp: number };
   complete: boolean;
   divisionId?: string;
