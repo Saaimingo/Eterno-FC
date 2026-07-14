@@ -91,11 +91,12 @@ export function brazilianDivisionSchedule(divisionId: string) {
   return BRAZIL_2026.divisions[divisionId as BrazilianDivisionId];
 }
 
-export function brazilianTransitionRules(): LeagueTransitionRule[] {
+export function brazilianTransitionRules(season=2026): LeagueTransitionRule[] {
+  const serieCRelegated=season>=2028?6:BRAZIL_2026.transitions["BRA-C"].count;
   return [
     { upper: "BRA-A", lower: "BRA-B", relegated: BRAZIL_2026.transitions["BRA-A"].count, promoted: BRAZIL_2026.transitions["BRA-B"].promotedCount },
     { upper: "BRA-B", lower: "BRA-C", relegated: BRAZIL_2026.transitions["BRA-B"].count, promoted: BRAZIL_2026.transitions["BRA-C"].promotedCount },
-    { upper: "BRA-C", lower: "BRA-D", relegated: BRAZIL_2026.transitions["BRA-C"].count, promoted: BRAZIL_2026.transitions["BRA-D"].promotedCount },
+    { upper: "BRA-C", lower: "BRA-D", relegated: serieCRelegated, promoted: BRAZIL_2026.transitions["BRA-D"].promotedCount },
   ];
 }
 
