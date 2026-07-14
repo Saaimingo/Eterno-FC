@@ -1,4 +1,70 @@
-export const MATCH_ENGINE_VERSION = "0.1.0-mp1";
+export const MATCH_ENGINE_VERSION = "0.2.0-mp2";
+
+export const TECHNICAL_ATTRIBUTE_KEYS = [
+  "corners",
+  "crossing",
+  "dribbling",
+  "finishing",
+  "firstTouch",
+  "freeKick",
+  "heading",
+  "longShots",
+  "longThrows",
+  "marking",
+  "passing",
+  "penalties",
+  "tackling",
+  "technique",
+] as const;
+
+export const MENTAL_ATTRIBUTE_KEYS = [
+  "aggression",
+  "anticipation",
+  "bravery",
+  "composure",
+  "concentration",
+  "decisions",
+  "determination",
+  "flair",
+  "leadership",
+  "offBall",
+  "positioning",
+  "teamwork",
+  "vision",
+  "workRate",
+] as const;
+
+export const PHYSICAL_ATTRIBUTE_KEYS = [
+  "acceleration",
+  "agility",
+  "balance",
+  "jumpingReach",
+  "naturalFitness",
+  "pace",
+  "stamina",
+  "strength",
+] as const;
+
+export const GOALKEEPER_ATTRIBUTE_KEYS = [
+  "aerialReach",
+  "commandOfArea",
+  "communication",
+  "eccentricity",
+  "handling",
+  "kicking",
+  "oneOnOnes",
+  "reflexes",
+  "rushingOut",
+  "punching",
+  "throwing",
+] as const;
+
+export const PLAYER_ATTRIBUTE_KEYS = [
+  ...TECHNICAL_ATTRIBUTE_KEYS,
+  ...MENTAL_ATTRIBUTE_KEYS,
+  ...PHYSICAL_ATTRIBUTE_KEYS,
+  ...GOALKEEPER_ATTRIBUTE_KEYS,
+] as const;
 
 export const CORE_ATTRIBUTE_KEYS = [
   "passing",
@@ -15,8 +81,27 @@ export const CORE_ATTRIBUTE_KEYS = [
   "stamina",
 ] as const;
 
+export type TechnicalAttribute = (typeof TECHNICAL_ATTRIBUTE_KEYS)[number];
+export type MentalAttribute = (typeof MENTAL_ATTRIBUTE_KEYS)[number];
+export type PhysicalAttribute = (typeof PHYSICAL_ATTRIBUTE_KEYS)[number];
+export type GoalkeeperAttribute = (typeof GOALKEEPER_ATTRIBUTE_KEYS)[number];
+export type PlayerAttribute = (typeof PLAYER_ATTRIBUTE_KEYS)[number];
+export type PlayerAttributes = Readonly<Record<PlayerAttribute, number>>;
 export type CoreAttribute = (typeof CORE_ATTRIBUTE_KEYS)[number];
 export type CoreAttributes = Readonly<Record<CoreAttribute, number>>;
+
+export type Foot = "left" | "right";
+
+export type FootProfile = Readonly<{
+  left: number;
+  right: number;
+  avoidsWeakFoot: boolean;
+}>;
+
+export type BodyProfile = Readonly<{
+  heightCm: number;
+  massKg: number;
+}>;
 
 export type MatchPosition =
   | "GK"
@@ -35,7 +120,9 @@ export type MatchPlayer = Readonly<{
   teamId: string;
   name: string;
   position: MatchPosition;
-  attributes: CoreAttributes;
+  attributes: PlayerAttributes;
+  feet: FootProfile;
+  body: BodyProfile;
   condition: number;
 }>;
 
@@ -59,6 +146,7 @@ export type MatchContext = Readonly<{
   seed: string;
   homeAdvantage: number;
   possessionsPerPeriod: number;
+  importance: number;
 }>;
 
 export type MatchInput = Readonly<{
@@ -84,6 +172,15 @@ export const MATCH_EVENT_TYPES = [
   "pass_completed",
   "pass_failed",
   "interception",
+  "dribble_attempt",
+  "tackle",
+  "dribble_won",
+  "cross_attempt",
+  "cross_completed",
+  "cross_failed",
+  "goalkeeper_claim",
+  "goalkeeper_punch",
+  "aerial_duel",
   "shot",
   "save",
   "goal",
@@ -99,6 +196,7 @@ export type EventAudit = Readonly<{
   probability?: number;
   roll?: number;
   components?: Readonly<Record<string, number>>;
+  details?: Readonly<Record<string, string | number | boolean>>;
 }>;
 
 export type CanonicalMatchEvent = Readonly<{
@@ -153,8 +251,19 @@ export type TeamStatistics = Readonly<{
   passesAttempted: number;
   passesCompleted: number;
   interceptions: number;
+  dribblesAttempted: number;
+  dribblesWon: number;
+  tacklesAttempted: number;
+  tacklesWon: number;
+  crossesAttempted: number;
+  crossesCompleted: number;
+  aerialDuels: number;
+  aerialDuelsWon: number;
+  goalkeeperClaims: number;
+  goalkeeperPunches: number;
   shots: number;
   shotsOnTarget: number;
+  headedShots: number;
   saves: number;
   goals: number;
 }>;
@@ -193,7 +302,14 @@ export function validateTeamSnapshot(team: TeamSnapshot) {
     if (playerIds.has(player.id)) throw new Error(`Jogador duplicado: ${player.id}.`);
     playerIds.add(player.id);
     assertRange(player.condition, 0, 100, `Condição de ${player.name}`);
-    for (const attribute of CORE_ATTRIBUTE_KEYS) {
+    assertRange(player.feet.left, 0, 1_000, `Pé esquerdo de ${player.name}`);
+    assertRange(player.feet.right, 0, 1_000, `Pé direito de ${player.name}`);
+    if (Math.max(player.feet.left, player.feet.right) < 100) {
+      throw new Error(`${player.name} precisa ter ao menos um pé utilizável.`);
+    }
+    assertRange(player.body.heightCm, 145, 220, `Altura de ${player.name}`);
+    assertRange(player.body.massKg, 45, 130, `Massa de ${player.name}`);
+    for (const attribute of PLAYER_ATTRIBUTE_KEYS) {
       assertRange(player.attributes[attribute], 1, 100, `${attribute} de ${player.name}`);
     }
   }
@@ -209,6 +325,7 @@ export function validateMatchInput(input: MatchInput) {
   if (input.home.id === input.away.id) throw new Error("Mandante e visitante devem ser equipes distintas.");
   assertRange(input.context.homeAdvantage, 0, 10, "Vantagem de mando");
   assertRange(input.context.possessionsPerPeriod, 1, 100, "Posses por período");
+  assertRange(input.context.importance, 0, 100, "Importância da partida");
   validateTeamSnapshot(input.home);
   validateTeamSnapshot(input.away);
 
