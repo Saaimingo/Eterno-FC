@@ -3,6 +3,7 @@ import { clamp, seededRandom } from "./domain/random";
 import { dateForSeason, SEASON_2026 } from "./rules/season-2026";
 import { BRAZIL_2026, brazilianDivisionSchedule, brazilianTransitionRules, regionalEligibleClubs } from "./rules/brazil-2026";
 import { divisionShortfall, resolveLeagueTransitions, type LeagueTransitionRule } from "./rules/league-transitions";
+import { buildTwoLeggedTies, resolveTwoLeggedTies } from "./rules/two-legged-ties";
 import type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, Intensity, JobVacancy, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
 
 export type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, IncomingBid, Intensity, JobVacancy, League, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
@@ -128,7 +129,7 @@ function makeGroupedRoundRobin(competition:Competition,startDate:string,interval
 
 function stageName(teamCount: number, preliminary = false) {
   if(preliminary) return "Fase preliminar";
-  if(teamCount>=32) return "16-avos"; if(teamCount===16) return "Oitavas"; if(teamCount===8) return "Quartas"; if(teamCount===4) return "Semifinal"; return "Final";
+  if(teamCount>32)return`Fase de ${teamCount}`;if(teamCount===32)return"16-avos";if(teamCount===16)return"Oitavas";if(teamCount===8)return"Quartas";if(teamCount===4)return"Semifinal";return"Final";
 }
 
 function cupOpening(competition: Competition, clubs: Club[], date: string): Fixture[] {
@@ -140,7 +141,7 @@ function cupOpening(competition: Competition, clubs: Club[], date: string): Fixt
 }
 
 function makeCompetition(id:string,name:string,short:string,type:CompetitionType,country:string,season:number,participantIds:string[],date:string): Competition {
-  return {id,name,short,type,country,season,participantIds,currentStage:type==="league"||type==="state"?"Liga":"",pendingByes:[],nextRoundDate:date,complete:false};
+  return {id,name,short,type,country,season,participantIds,currentStage:type==="league"||type==="state"?"Liga":"",pendingByes:[],promotedClubIds:[],nextRoundDate:date,complete:false};
 }
 
 type SeasonQualification = { brazilPrimary: string[]; brazilSecondary: string[]; argentinaPrimary: string[]; argentinaSecondary: string[]; spainPrimary: string[]; italyPrimary: string[] };
@@ -308,6 +309,44 @@ function advanceCups(game:GameState,fixtures:Fixture[],competitions:Competition[
   return{fixtures:nextFixtures,competitions:nextCompetitions};
 }
 
+function pairTeams(teams:readonly string[]):Array<readonly[string,string]>{return Array.from({length:Math.floor(teams.length/2)},(_,index)=>[teams[index*2],teams[index*2+1]] as const);}
+
+function advanceBrazilianLeagueStages(game:GameState,fixtures:Fixture[],competitions:Competition[]){
+  const nextFixtures=[...fixtures],nextCompetitions=competitions.map((competition)=>({...competition,pendingByes:[...competition.pendingByes],promotedClubIds:[...(competition.promotedClubIds??[])]}));
+  const tieBreaker=(first:string,second:string)=>squadStrength(game,first)>=squadStrength(game,second)?first:second;
+  const serieB=nextCompetitions.find((competition)=>competition.id==="BRA-B");
+  if(serieB&&!serieB.complete){
+    const regular=nextFixtures.filter((fixture)=>fixture.competitionId===serieB.id&&fixture.stage==="Liga");
+    if(serieB.currentStage==="Liga"&&regular.length&&regular.every((fixture)=>fixture.played)){
+      const table=calculateStandings(serieB.participantIds.map((id)=>clubById(game,id)),regular);serieB.championId=table[0]?.clubId;serieB.promotedClubIds=table.slice(0,2).map((row)=>row.clubId);serieB.currentStage="Playoffs de acesso";
+      const lastDate=regular.reduce((latest,fixture)=>fixture.date>latest?fixture.date:latest,regular[0].date),pairs:Array<readonly[string,string]>=[[table[2].clubId,table[5].clubId],[table[3].clubId,table[4].clubId]];
+      nextFixtures.push(...buildTwoLeggedTies({competitionId:serieB.id,season:serieB.season,stage:serieB.currentStage,round:39,firstLegDate:datePlusDays(lastDate,7),pairs}));
+    }else if(serieB.currentStage==="Playoffs de acesso"){
+      const playoff=nextFixtures.filter((fixture)=>fixture.competitionId===serieB.id&&fixture.stage===serieB.currentStage);if(playoff.length&&playoff.every((fixture)=>fixture.played)){const resolved=resolveTwoLeggedTies(playoff,tieBreaker);serieB.promotedClubIds=[...(serieB.promotedClubIds??[]),...resolved.winners];serieB.complete=true;serieB.currentStage="Encerrada";}
+    }
+  }
+  const serieD=nextCompetitions.find((competition)=>competition.id==="BRA-D");
+  if(serieD&&!serieD.complete){
+    const stageFixtures=nextFixtures.filter((fixture)=>fixture.competitionId===serieD.id&&fixture.stage===serieD.currentStage);
+    if(serieD.currentStage==="Fase de grupos"){
+      const groups=[...new Set(nextFixtures.filter((fixture)=>fixture.competitionId===serieD.id&&fixture.stage.startsWith("Grupo ")).map((fixture)=>fixture.stage))];const groupFixtures=nextFixtures.filter((fixture)=>fixture.competitionId===serieD.id&&groups.includes(fixture.stage));
+      if(groupFixtures.length&&groupFixtures.every((fixture)=>fixture.played)){const qualified=groups.flatMap((group)=>{const matches=groupFixtures.filter((fixture)=>fixture.stage===group),ids=[...new Set(matches.flatMap((fixture)=>[fixture.homeId,fixture.awayId]))];return calculateStandings(ids.map((id)=>clubById(game,id)),matches).slice(0,BRAZIL_2026.serieDFormat.advancingPerGroup).map((row)=>row.clubId);});const random=seededRandom(`${serieD.season}-serie-d-2fase`),shuffled=[...qualified].sort(()=>random()-.5),lastDate=groupFixtures.reduce((latest,fixture)=>fixture.date>latest?fixture.date:latest,groupFixtures[0].date);serieD.currentStage="2ª fase";nextFixtures.push(...buildTwoLeggedTies({competitionId:serieD.id,season:serieD.season,stage:serieD.currentStage,round:11,firstLegDate:datePlusDays(lastDate,7),pairs:pairTeams(shuffled)}));}
+    }else if(stageFixtures.length&&stageFixtures.every((fixture)=>fixture.played)){
+      if(serieD.currentStage==="Semifinais e playoffs"){
+        const semifinals=stageFixtures.filter((fixture)=>fixture.tieId?.includes("-semi-")),playoffs=stageFixtures.filter((fixture)=>fixture.tieId?.includes("-playoff-"));const semifinalWinners=resolveTwoLeggedTies(semifinals,tieBreaker).winners,playoffWinners=resolveTwoLeggedTies(playoffs,tieBreaker).winners;serieD.promotedClubIds=[...(serieD.promotedClubIds??[]),...playoffWinners];serieD.currentStage="Final";const firstDate=datePlusDays(stageFixtures.reduce((latest,fixture)=>fixture.date>latest?fixture.date:latest,stageFixtures[0].date),7),finalFixtures=buildTwoLeggedTies({competitionId:serieD.id,season:serieD.season,stage:"Final",round:17,firstLegDate:firstDate,pairs:pairTeams(semifinalWinners)}).map((fixture)=>({...fixture,tieId:fixture.tieId?.replace("-17-","-final-")}));nextFixtures.push(...finalFixtures);
+      }else if(serieD.currentStage==="Final"){
+        serieD.championId=resolveTwoLeggedTies(stageFixtures,tieBreaker).winners[0];serieD.complete=true;serieD.currentStage="Campeão";
+      }else{
+        const resolved=resolveTwoLeggedTies(stageFixtures,tieBreaker),stageOrder:Record<string,string>={"2ª fase":"3ª fase","3ª fase":"Oitavas","Oitavas":"Quartas"};const lastDate=stageFixtures.reduce((latest,fixture)=>fixture.date>latest?fixture.date:latest,stageFixtures[0].date);
+        if(serieD.currentStage==="Quartas"){serieD.promotedClubIds=resolved.winners;serieD.currentStage="Semifinais e playoffs";const semifinalFixtures=buildTwoLeggedTies({competitionId:serieD.id,season:serieD.season,stage:serieD.currentStage,round:15,firstLegDate:datePlusDays(lastDate,7),pairs:pairTeams(resolved.winners)}).map((fixture)=>({...fixture,tieId:fixture.tieId?.replace("-15-","-semi-")})),playoffFixtures=buildTwoLeggedTies({competitionId:serieD.id,season:serieD.season,stage:serieD.currentStage,round:15,firstLegDate:datePlusDays(lastDate,7),pairs:pairTeams(resolved.losers)}).map((fixture)=>({...fixture,tieId:fixture.tieId?.replace("-15-","-playoff-")}));nextFixtures.push(...semifinalFixtures,...playoffFixtures);}else{const nextStage=stageOrder[serieD.currentStage];if(nextStage){serieD.currentStage=nextStage;nextFixtures.push(...buildTwoLeggedTies({competitionId:serieD.id,season:serieD.season,stage:nextStage,round:stageFixtures[0].round+2,firstLegDate:datePlusDays(lastDate,7),pairs:pairTeams(resolved.winners)}));}}
+      }
+    }
+  }
+  return{fixtures:nextFixtures,competitions:nextCompetitions};
+}
+
+function advanceCompetitions(game:GameState,fixtures:Fixture[],competitions:Competition[]){const cups=advanceCups(game,fixtures,competitions);return advanceBrazilianLeagueStages({...game,fixtures:cups.fixtures,competitions:cups.competitions},cups.fixtures,cups.competitions);}
+
 function generateMarketOffers(game:GameState,count=6):MarketOffer[]{const random=seededRandom(`${game.season}-${game.date}-market`);const candidates=game.players.filter((player)=>!player.academy&&player.clubId!==game.userClubId&&(!player.starting||player.listed)).sort(()=>random()-.5).slice(0,count);return candidates.map((player,index)=>({id:`offer-${game.date}-${index}-${player.id}`,playerId:player.id,fromClubId:player.clubId,askingPrice:Math.round(player.value*((player.listed?.86:.96)+random()*.16)),expiresAt:datePlusDays(game.date,28)}));}
 
 function generateVacancies(game:GameState,count=4):JobVacancy[]{
@@ -336,7 +375,7 @@ function runAiTransfers(game:GameState,players:Player[],date:string):{players:Pl
 export function finishRound(game:GameState,plan:MatchPlan):GameState {
   const userFixture=game.fixtures.find((fixture)=>fixture.id===plan.fixtureId);if(!userFixture||userFixture.played)return game;let players=game.players.map((player)=>({...player}));
   let fixtures=game.fixtures.map((fixture)=>{if(fixture.id===userFixture.id)return{...fixture,played:true,homeGoals:plan.homeGoals,awayGoals:plan.awayGoals};if(!fixture.played&&fixture.date<=userFixture.date&&fixture.homeId!==game.userClubId&&fixture.awayId!==game.userClubId)return playFixture(game,fixture,"world");return fixture;});
-  const advanced=advanceCups(game,fixtures,game.competitions);fixtures=advanced.fixtures;const competitions=advanced.competitions;
+  const advanced=advanceCompetitions(game,fixtures,game.competitions);fixtures=advanced.fixtures;const competitions=advanced.competitions;
   const home=userFixture.homeId===game.userClubId,userGoals=home?plan.homeGoals:plan.awayGoals,opponentGoals=home?plan.awayGoals:plan.homeGoals;const result:"V"|"E"|"D"=userGoals>opponentGoals?"V":userGoals===opponentGoals?"E":"D";const opponent=clubById(game,home?userFixture.awayId:userFixture.homeId);const random=seededRandom(`${plan.fixtureId}-stats`);
   players=players.map((player)=>player.clubId===game.userClubId&&!player.academy?{...player,injuredMatches:player.injuredMatches?player.injuredMatches-1:undefined,appearances:player.appearances+(player.starting?1:0),fitness:clamp(player.fitness-(player.starting?(game.intensity==="Alta"?9:game.intensity==="Baixa"?3:6):1),45,100),morale:clamp(player.morale+(result==="V"?3:result==="D"?-3:0),30,100)}:player);
   let injuryNews:NewsItem|undefined;const injuryChance=game.intensity==="Alta"?.12:game.intensity==="Normal"?.075:.04;if(random()<injuryChance){const options=players.filter((player)=>player.clubId===game.userClubId&&!player.academy&&player.starting&&!player.injuredMatches),injured=options[Math.floor(random()*options.length)];if(injured){const duration=1+Math.floor(random()*4),replacement=players.filter((player)=>player.clubId===game.userClubId&&!player.academy&&!player.starting&&!player.injuredMatches&&player.position===injured.position).sort((a,b)=>b.rating-a.rating)[0];players=players.map((player)=>player.id===injured.id?{...player,injuredMatches:duration,starting:false}:replacement&&player.id===replacement.id?{...player,starting:true}:player);injuryNews={id:`injury-${userFixture.date}-${injured.id}`,date:userFixture.date,category:"elenco",title:`Lesão: ${injured.name}`,body:`O atleta ficará fora por cerca de ${duration} partida(s).${replacement?` ${replacement.name} assumiu a vaga automaticamente.`:""}`,unread:true};}}
@@ -358,7 +397,7 @@ export function finishRound(game:GameState,plan:MatchPlan):GameState {
 
 function completeWorldSeason(game:GameState) {
   let fixtures=[...game.fixtures],competitions=game.competitions.map((item)=>({...item,pendingByes:[...item.pendingByes]}));let guard=0;
-  while(guard<80){const pending=fixtures.filter((fixture)=>!fixture.played).sort((a,b)=>a.date.localeCompare(b.date));if(!pending.length)break;const date=pending[0].date;const snapshot={...game,fixtures,competitions} as GameState;fixtures=fixtures.map((fixture)=>!fixture.played&&fixture.date===date?playFixture(snapshot,fixture,"season-close"):fixture);const advanced=advanceCups(snapshot,fixtures,competitions);fixtures=advanced.fixtures;competitions=advanced.competitions;guard+=1;}
+  while(guard<320){const pending=fixtures.filter((fixture)=>!fixture.played).sort((a,b)=>a.date.localeCompare(b.date));if(!pending.length)break;const date=pending[0].date;const snapshot={...game,fixtures,competitions} as GameState;fixtures=fixtures.map((fixture)=>!fixture.played&&fixture.date===date?playFixture(snapshot,fixture,"season-close"):fixture);const advanced=advanceCompetitions(snapshot,fixtures,competitions);fixtures=advanced.fixtures;competitions=advanced.competitions;guard+=1;}
   return{fixtures,competitions};
 }
 
@@ -400,7 +439,7 @@ export function startNextSeason(game:GameState):GameState {
   const completed=completeWorldSeason(game);const snapshot={...game,fixtures:completed.fixtures,competitions:completed.competitions} as GameState;const tables=new Map<string,Standing[]>();game.leagues.forEach((league)=>tables.set(league.id,competitionTable(snapshot,league.id)));
   const qualification=qualificationFromTables(tables);
   const currentLeague=userLeague(game),userTable=tables.get(currentLeague.id)??[],userPosition=userTable.findIndex((row)=>row.clubId===game.userClubId)+1,userRow=userTable.find((row)=>row.clubId===game.userClubId)??{points:0};const champion=clubById(game,userTable[0]?.clubId??game.userClubId);
-  const transitions:LeagueTransitionRule[]=[...brazilianTransitionRules(),{upper:"ESP-1",lower:"ESP-2",relegated:3,promoted:3},{upper:"ITA-1",lower:"ITA-2",relegated:3,promoted:3}];const moves=resolveLeagueTransitions(transitions,tables);
+  const transitions:LeagueTransitionRule[]=[...brazilianTransitionRules(game.season),{upper:"ESP-1",lower:"ESP-2",relegated:3,promoted:3},{upper:"ITA-1",lower:"ITA-2",relegated:3,promoted:3}];const moves=resolveLeagueTransitions(transitions,tables);const applyPromoted=(lower:string,upper:string)=>{const promoted=snapshot.competitions.find((competition)=>competition.id===lower)?.promotedClubIds;if(!promoted?.length)return;game.clubs.filter((club)=>club.divisionId===lower&&moves.get(club.id)===upper).forEach((club)=>moves.delete(club.id));promoted.forEach((clubId)=>moves.set(clubId,upper));};applyPromoted("BRA-B","BRA-A");applyPromoted("BRA-D","BRA-C");
   let clubs=game.clubs.map((club)=>moves.has(club.id)?{...club,divisionId:moves.get(club.id)!}:club);const postMoveDivisions=new Map(clubs.map((club)=>[club.id,club.divisionId]));const serieDShortfall=divisionShortfall("BRA-D",game.clubs.filter((club)=>club.divisionId==="BRA-D").map((club)=>club.id),postMoveDivisions);clubs=mergeMissingWorldClubs([...clubs,...createSerieDEntrants(game.season+1,serieDShortfall)]);const oldDivision=currentLeague.id,newDivision=clubs.find((club)=>club.id===game.userClubId)?.divisionId??oldDivision;const outcome=newDivision!==oldDivision?(game.leagues.find((league)=>league.id===newDivision)!.level<currentLeague.level?"Promovido":"Rebaixado"):`${userPosition}º lugar`;
   const nextSeason=game.season+1,random=seededRandom(`${nextSeason}-aging`);let retired=0;let players=game.players.flatMap((player)=>{if(player.academy)return[{...player,age:player.age+1,rating:clamp(player.rating+(random()>.3?1:0),35,player.potential)}];const age=player.age+1;if(age>=38||(age>=35&&random()>.72)){if(player.clubId===game.userClubId)retired+=1;return[];}const development=age<=24&&player.rating<player.potential?(random()>.24?1:0):age>=32&&random()>.4?-1:0;return[{...player,age,rating:clamp(player.rating+development,38,player.potential),contract:Math.max(1,player.contract-1),goals:0,assists:0,appearances:0,fitness:100,morale:clamp(player.morale+3,45,100),listed:random()>.88}];});
   clubs.forEach((club)=>{const count=players.filter((player)=>player.clubId===club.id&&!player.academy).length;if(count<20)players.push(...makeAcademy(club,nextSeason,20-count).map((player)=>({...player,id:`${player.id}-senior`,academy:false,age:player.age+2,rating:player.rating+5})));});players=[...players.filter((player)=>!(player.clubId===game.userClubId&&player.academy&&player.age>19)),...makeAcademy(clubs.find((club)=>club.id===game.userClubId)!,nextSeason,5)];
@@ -410,7 +449,7 @@ export function startNextSeason(game:GameState):GameState {
   next.standings=refreshUserStandings(next);next.marketOffers=generateMarketOffers(next,8);next.vacancies=generateVacancies(next,5);if(managerStatus==="unemployed")next.jobOffers=next.vacancies.filter((job)=>job.minimumReputation<=next.managerReputation).slice(0,3).map((job)=>makeManagerOffer(next,job));next.date=nextUserFixture(next)?.date??next.date;return next;
 }
 
-export function seasonIsOver(game:GameState){if(game.managerStatus==="unemployed")return false;return !nextUserFixture(game)&&game.fixtures.filter((fixture)=>fixture.competitionId===userClub(game).divisionId).every((fixture)=>fixture.played);}
+export function seasonIsOver(game:GameState){if(game.managerStatus==="unemployed")return false;return !nextUserFixture(game);}
 
 export function promoteYouth(game:GameState,playerId:string):GameState{return{...game,players:game.players.map((player)=>player.id===playerId?{...player,academy:false,contract:3,wage:Math.max(player.wage,6500),morale:clamp(player.morale+8,0,100)}:player),news:[{id:`promote-${playerId}`,date:game.date,category:"base",title:"Joia promovida ao elenco principal",body:`${game.players.find((player)=>player.id===playerId)?.name??"O jovem"} agora treina com os profissionais.`,unread:true},...game.news]};}
 export function scoutProspect(game:GameState):GameState{if(game.balance<600_000)return game;const prospect=makeAcademy(userClub(game),game.season+game.players.filter((player)=>player.academy).length,1)[0];return{...game,balance:game.balance-600_000,players:[...game.players,prospect],news:[{id:`scout-${prospect.id}`,date:game.date,category:"base",title:"Olheiro encontra novo talento",body:`${prospect.name}, ${prospect.position}, chega para formação.`,unread:true},...game.news]};}
