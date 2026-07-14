@@ -26,6 +26,7 @@ tests/        validações automatizadas
 
 - [Visão e decisões do produto](docs/eterno-fc-design-v1.md)
 - [Arquitetura técnica proposta](docs/arquitetura-tecnica-proposta-v1.md)
+- [Especificação do motor de partida](docs/motor-de-partida-especificacao-v1.md)
 - [Matriz brasileira de regulamentos 2026](docs/brasil-matriz-regulamentos-2026.md)
 - [Matriz CONMEBOL](docs/conmebol-matriz-regulamentos-2026.md)
 - [Matriz UEFA](docs/uefa-matriz-regulamentos-2026-27.md)
