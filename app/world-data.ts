@@ -67,7 +67,7 @@ const brazilianFillerNames = ["União","Atlético","Ferroviário","Nacional","Op
 
 function completeBrazilianDivision(divisionId:keyof typeof BRAZILIAN_DIVISION_TARGETS,raw:RawClub[],offset:number):ClubSeed[]{
   const clubs=buildDivision(divisionId,"Brasil",raw,offset),target=BRAZILIAN_DIVISION_TARGETS[divisionId],level=Number(divisionId.at(-1)==="A"?1:divisionId.at(-1)==="B"?2:divisionId.at(-1)==="C"?3:4);
-  return [...clubs,...Array.from({length:Math.max(0,target-clubs.length)},(_,index)=>{const [state,city]=brazilianFillerCities[(index+offset*3)%brazilianFillerCities.length],identity=brazilianFillerNames[(index+offset)%brazilianFillerNames.length],name=`${identity} ${city}`,palette=palettes[(index+offset)%palettes.length],reputation=Math.max(48,82-level*7-(index%8));return{id:`${slug(name)}-${divisionId.toLowerCase()}`,name,short:`${divisionId.at(-1)}${String(index+1).padStart(2,"0")}`,city,state,country:"Brasil",divisionId,reputation,academy:Math.max(44,reputation-5+(index%7)),stadium:`Estádio ${city}`,primary:palette[0],secondary:palette[1]};})];
+  return [...clubs,...Array.from({length:Math.max(0,target-clubs.length)},(_,index)=>{const [state,city]=brazilianFillerCities[(index+offset*3)%brazilianFillerCities.length],identity=brazilianFillerNames[(index+offset)%brazilianFillerNames.length],name=`${identity} ${city}`,palette=palettes[(index+offset)%palettes.length],reputation=Math.max(48,82-level*7-(index%8));return{id:`${slug(name)}-${divisionId.toLowerCase()}`,name,short:`${divisionId.at(-1)}${String(index+1).padStart(2,"0")}`,city,state,country:"Brasil" as const,divisionId,reputation,academy:Math.max(44,reputation-5+(index%7)),stadium:`Estádio ${city}`,primary:palette[0],secondary:palette[1]};})];
 }
 
 const brazilA: RawClub[] = [
