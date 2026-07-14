@@ -136,6 +136,7 @@ export type GameState = {
   managerName: string;
   userClubId: string;
   managerStatus: "employed" | "unemployed";
+  acceptingJobOffers: boolean;
   managerReputation: number;
   managerPoints: number;
   managerRecord: ManagerClubRecord[];
