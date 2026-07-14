@@ -15,6 +15,7 @@
     "lint": "bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "bash scripts/sites-env.sh -- tsc --noEmit",
     "calibrate:match-engine": "node --import tsx scripts/calibrate-match-engine.mjs",
+    "calibrate:match-engine:specialists": "node --import tsx scripts/calibrate-match-engine-specialists.mjs",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {

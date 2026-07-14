@@ -39,6 +39,7 @@ function freezeAudit(audit?: EventAudit) {
   return Object.freeze({
     ...audit,
     components: audit.components ? Object.freeze({ ...audit.components }) : undefined,
+    details: audit.details ? Object.freeze({ ...audit.details }) : undefined,
   });
 }
 
@@ -173,6 +174,21 @@ export function assertLedgerInvariants(
     }
     if (event.type === "interception" && !causeTypes.includes("pass_failed")) {
       throw new Error("interception deve ser causada por pass_failed.");
+    }
+    if (event.type === "tackle" && !causeTypes.includes("dribble_attempt")) {
+      throw new Error("tackle deve ser causado por dribble_attempt.");
+    }
+    if (event.type === "dribble_won" && !causeTypes.includes("tackle")) {
+      throw new Error("dribble_won deve ser causado por tackle.");
+    }
+    if (["cross_completed", "cross_failed"].includes(event.type) && !causeTypes.includes("cross_attempt")) {
+      throw new Error(`${event.type} deve ser causado por cross_attempt.`);
+    }
+    if (["goalkeeper_claim", "goalkeeper_punch"].includes(event.type) && !causeTypes.includes("cross_completed")) {
+      throw new Error(`${event.type} deve ser causado por cross_completed.`);
+    }
+    if (event.type === "aerial_duel" && !causeTypes.includes("cross_completed")) {
+      throw new Error("aerial_duel deve ser causado por cross_completed.");
     }
     if (["save", "goal"].includes(event.type) && !causeTypes.includes("shot")) {
       throw new Error(`${event.type} deve ser causado por shot.`);

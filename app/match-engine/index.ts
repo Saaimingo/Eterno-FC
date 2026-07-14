@@ -1,5 +1,7 @@
 export * from "./contracts";
+export * from "./feet";
 export * from "./ledger";
+export * from "./physiology";
 export * from "./probabilities";
 export * from "./prototype";
 export * from "./rng";
