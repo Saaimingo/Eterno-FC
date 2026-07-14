@@ -11,3 +11,10 @@ test("selects the 126 clubs and separates every 2026 entry wave", () => {
   assert.equal(selection.firstPhase.length,28);assert.equal(selection.secondPhase.length,74);assert.equal(selection.thirdPhase.length,4);assert.equal(selection.fifthPhase.length,20);
   assert.equal(selection.fifthPhase.every((id)=>brazilian.find((club)=>club.id===id)?.divisionId==="BRA-A"),true);
 });
+
+test("prioritizes clubs qualified through their state championships",()=>{
+  const brazilian=CLUB_SEEDS.filter((club)=>club.country==="Brasil"),eligible=brazilian.filter((club)=>club.divisionId!=="BRA-A").slice(-3),selection=selectBrazilCupEntrants(brazilian,[],[{stateCode:"ZZ",slots:2,rankedClubIds:eligible.map((club)=>club.id)}]);
+  assert.equal(selection.all.includes(eligible[0].id),true);
+  assert.equal(selection.all.includes(eligible[1].id),true);
+  assert.equal(new Set(selection.all).size,126);
+});
