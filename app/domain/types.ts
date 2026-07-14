@@ -13,6 +13,21 @@ export type Club = ClubSeed & {
 
 export type League = LeagueSeed;
 
+export type PlayerAttributes = {
+  pace: number;
+  stamina: number;
+  strength: number;
+  passing: number;
+  vision: number;
+  dribbling: number;
+  finishing: number;
+  tackling: number;
+  positioning: number;
+  composure: number;
+  reflexes: number;
+  handling: number;
+};
+
 export type Player = {
   id: string;
   clubId: string;
@@ -21,6 +36,7 @@ export type Player = {
   age: number;
   rating: number;
   potential: number;
+  attributes: PlayerAttributes;
   fitness: number;
   morale: number;
   value: number;
