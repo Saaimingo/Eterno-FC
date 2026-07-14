@@ -50,6 +50,7 @@ export type Player = {
   nationality: string;
   temperament: "Fair play" | "Cordeirinho" | "Cavalheiro" | "Caneleiro" | "Caceteiro" | "Sarrafeiro";
   listed: boolean;
+  injuredMatches?: number;
 };
 
 export type Fixture = {
