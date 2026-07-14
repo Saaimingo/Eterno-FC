@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { divisionShortfall, resolveLeagueTransitions } from "../app/rules/league-transitions.ts";
-import { BRAZIL_2026 } from "../app/rules/brazil-2026.ts";
+import { BRAZIL_2026, brazilianTransitionRules } from "../app/rules/brazil-2026.ts";
 import { BRAZILIAN_DIVISION_TARGETS, CLUB_SEEDS } from "../app/world-data.ts";
 
 const rows = (prefix, count) => Array.from({ length: count }, (_, index) => ({ clubId: `${prefix}-${index + 1}` }));
@@ -27,6 +27,13 @@ test("moves the configured top and bottom clubs between divisions", () => {
   assert.equal(moves.get("c-19"), "D");
   assert.equal(moves.get("d-6"), "C");
   assert.equal(moves.has("a-16"), false);
+});
+
+test("stabilizes Serie C at 28 clubs after the 2026-2027 expansion", () => {
+  assert.equal(brazilianTransitionRules(2026).at(-1).relegated,2);
+  assert.equal(brazilianTransitionRules(2027).at(-1).relegated,2);
+  assert.equal(brazilianTransitionRules(2028).at(-1).relegated,6);
+  assert.equal(brazilianTransitionRules(2100).at(-1).promoted,6);
 });
 
 test("calculates how many Serie D entrants are needed after transitions", () => {
