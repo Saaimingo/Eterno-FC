@@ -127,6 +127,8 @@ export type TransferEvent = {
 export type MarketOffer = { id: string; playerId: string; fromClubId: string; askingPrice: number; expiresAt: string };
 export type IncomingBid = { id: string; playerId: string; fromClubId: string; fee: number; expiresAt: string };
 export type JobVacancy = { id: string; clubId: string; openedAt: string; minimumReputation: number; status: "open" | "offered" };
+export type ManagerContract = { clubId: string; weeklySalary: number; expiresSeason: number; releaseClause: number };
+export type ManagerOffer = JobVacancy & { weeklySalary: number; contractYears: number; releaseClausePaid: number };
 export type ManagerClubRecord = { clubId: string; fromSeason: number; toSeason?: number; matches: number; wins: number; trophies: number };
 export type BoardObjective = { id: "promotion" | "position" | "finances" | "academy"; label: string; weight: number; status: "em andamento" | "cumprida" | "não cumprida" };
 
@@ -138,6 +140,7 @@ export type GameState = {
   userClubId: string;
   managerStatus: "employed" | "unemployed";
   acceptingJobOffers: boolean;
+  managerContract: ManagerContract;
   managerReputation: number;
   managerPoints: number;
   managerRecord: ManagerClubRecord[];
@@ -156,7 +159,7 @@ export type GameState = {
   marketOffers: MarketOffer[];
   incomingBids: IncomingBid[];
   vacancies: JobVacancy[];
-  jobOffers: JobVacancy[];
+  jobOffers: ManagerOffer[];
   formation: "4-3-3" | "4-4-2" | "4-2-3-1" | "3-5-2";
   mentality: Mentality;
   intensity: Intensity;
