@@ -193,6 +193,16 @@ export function assertLedgerInvariants(
     if (["save", "goal"].includes(event.type) && !causeTypes.includes("shot")) {
       throw new Error(`${event.type} deve ser causado por shot.`);
     }
+    if (["substitution", "tactical_change"].includes(event.type) && event.causes.length !== 1) {
+      throw new Error(`${event.type} deve ter exatamente uma causa anterior.`);
+    }
+    if (event.type === "substitution"
+      && (!event.teamId || !event.actorId || !event.targetId || event.actorId === event.targetId)) {
+      throw new Error("substitution deve identificar equipe, jogador que sai e jogador que entra.");
+    }
+    if (event.type === "tactical_change" && !event.teamId) {
+      throw new Error("tactical_change deve pertencer a uma equipe.");
+    }
     if (event.type === "match_end" && !causeTypes.includes("period_end")) {
       throw new Error("match_end deve ser causado por period_end.");
     }

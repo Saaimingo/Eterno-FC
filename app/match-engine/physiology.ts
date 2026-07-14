@@ -2,7 +2,6 @@ import type {
   MatchContext,
   MatchPeriod,
   MatchPlayer,
-  PlayerMatchState,
   PossessionPhase,
   Score,
 } from "./contracts";
@@ -40,12 +39,6 @@ export class FatigueTracker {
     for (const player of players) this.exert(player, load);
   }
 
-  states(players: readonly MatchPlayer[]): readonly PlayerMatchState[] {
-    return Object.freeze(players.map((player) => Object.freeze({
-      playerId: player.id,
-      fatigue: Number(this.value(player).toFixed(2)),
-    })));
-  }
 }
 
 const PHASE_PRESSURE: Record<PossessionPhase, number> = {

@@ -1,4 +1,4 @@
-export const MATCH_ENGINE_VERSION = "0.2.0-mp2";
+export const MATCH_ENGINE_VERSION = "0.3.0-mp3";
 
 export const TECHNICAL_ATTRIBUTE_KEYS = [
   "corners",
@@ -103,17 +103,76 @@ export type BodyProfile = Readonly<{
   massKg: number;
 }>;
 
-export type MatchPosition =
-  | "GK"
-  | "RB"
-  | "CB"
-  | "LB"
-  | "DM"
-  | "CM"
-  | "AM"
-  | "RW"
-  | "LW"
-  | "ST";
+export const MATCH_POSITIONS = ["GK", "RB", "CB", "LB", "DM", "CM", "AM", "RW", "LW", "ST"] as const;
+export type MatchPosition = (typeof MATCH_POSITIONS)[number];
+
+export const PLAYER_TRAITS = [
+  "dictates_tempo",
+  "cuts_inside",
+  "keeps_width",
+  "runs_with_ball",
+  "avoids_dribbling",
+  "tries_killer_balls",
+  "prefers_simple_passes",
+  "tries_long_passes",
+  "switches_play",
+  "early_crosses",
+  "arrives_late",
+  "stays_back",
+  "first_time_shots",
+  "places_shots",
+  "shoots_with_power",
+  "avoids_weak_foot",
+  "presses_aggressively",
+  "avoids_risky_tackles",
+  "plays_out_of_pressure",
+  "plays_with_back_to_goal",
+  "seeks_one_twos",
+] as const;
+
+export type PlayerTrait = (typeof PLAYER_TRAITS)[number];
+export type PositionFamiliarity = Readonly<Partial<Record<MatchPosition, number>>>;
+
+export const PLAYER_ROLES = [
+  "goalkeeper",
+  "central_defender",
+  "ball_playing_defender",
+  "libero",
+  "defensive_fullback",
+  "support_fullback",
+  "attacking_wingback",
+  "ball_winning_midfielder",
+  "deep_lying_playmaker",
+  "box_to_box_midfielder",
+  "advanced_playmaker",
+  "shadow_striker",
+  "wide_winger",
+  "inside_forward",
+  "second_striker",
+  "mobile_forward",
+  "target_forward",
+  "poacher",
+] as const;
+
+export type PlayerRole = (typeof PLAYER_ROLES)[number];
+
+export type IndividualInstructions = Readonly<{
+  risk: number;
+  dribble: number;
+  cross: number;
+  shoot: number;
+  pressing: number;
+  width: "narrow" | "balanced" | "wide";
+  movement: "hold" | "balanced" | "get_forward";
+}>;
+
+export type RoleAssignment = Readonly<{
+  playerId: string;
+  position: MatchPosition;
+  role: PlayerRole;
+  tacticalFamiliarity: number;
+  instructions: IndividualInstructions;
+}>;
 
 export type MatchPlayer = Readonly<{
   id: string;
@@ -124,6 +183,8 @@ export type MatchPlayer = Readonly<{
   feet: FootProfile;
   body: BodyProfile;
   condition: number;
+  positionFamiliarity: PositionFamiliarity;
+  traits: readonly PlayerTrait[];
 }>;
 
 export type TacticalPlan = Readonly<{
@@ -131,14 +192,45 @@ export type TacticalPlan = Readonly<{
   mentality: "defensive" | "balanced" | "attacking";
   risk: number;
   tempo: number;
+  width: number;
+  defensiveLine: number;
+  pressingLine: number;
+  pressingIntensity: number;
+  passingStyle: "short" | "mixed" | "direct";
+  attackingFocus: "balanced" | "center" | "flanks";
+  transitionStyle: "hold" | "balanced" | "counter";
+  creativeFreedom: number;
 }>;
 
 export type TeamSnapshot = Readonly<{
   id: string;
   name: string;
   players: readonly MatchPlayer[];
+  bench: readonly MatchPlayer[];
+  assignments: readonly RoleAssignment[];
   tactics: TacticalPlan;
 }>;
+
+export type SubstitutionIntervention = Readonly<{
+  id: string;
+  type: "substitution";
+  teamId: string;
+  clockMs: number;
+  playerOutId: string;
+  playerInId: string;
+  assignment: RoleAssignment;
+}>;
+
+export type TacticalChangeIntervention = Readonly<{
+  id: string;
+  type: "tactical_change";
+  teamId: string;
+  clockMs: number;
+  changes: Readonly<Partial<TacticalPlan>>;
+  assignmentChanges: readonly RoleAssignment[];
+}>;
+
+export type MatchIntervention = SubstitutionIntervention | TacticalChangeIntervention;
 
 export type MatchContext = Readonly<{
   matchId: string;
@@ -153,6 +245,7 @@ export type MatchInput = Readonly<{
   context: MatchContext;
   home: TeamSnapshot;
   away: TeamSnapshot;
+  interventions: readonly MatchIntervention[];
 }>;
 
 export type MatchPeriod = 1 | 2;
@@ -184,6 +277,8 @@ export const MATCH_EVENT_TYPES = [
   "shot",
   "save",
   "goal",
+  "substitution",
+  "tactical_change",
   "period_end",
   "match_end",
 ] as const;
@@ -232,6 +327,11 @@ export type RngTrace = Readonly<{
 export type PlayerMatchState = Readonly<{
   playerId: string;
   fatigue: number;
+  status: "active" | "substituted" | "bench";
+  position: MatchPosition;
+  role: PlayerRole;
+  enteredAtMs?: number;
+  exitedAtMs?: number;
 }>;
 
 export type MatchState = Readonly<{
@@ -288,34 +388,183 @@ function assertRange(value: number, minimum: number, maximum: number, label: str
   }
 }
 
+const PLAYER_TRAIT_SET = new Set<string>(PLAYER_TRAITS);
+const PLAYER_ROLE_SET = new Set<string>(PLAYER_ROLES);
+const MATCH_POSITION_SET = new Set<string>(MATCH_POSITIONS);
+const MATCH_DURATION_MS = 5_400_000;
+
+function validatePlayer(player: MatchPlayer, team: TeamSnapshot, playerIds: Set<string>) {
+  if (!player.id || !player.name) throw new Error(`Jogador inválido em ${team.name}.`);
+  if (player.teamId !== team.id) throw new Error(`${player.name} está associado à equipe errada.`);
+  if (playerIds.has(player.id)) throw new Error(`Jogador duplicado: ${player.id}.`);
+  playerIds.add(player.id);
+  if (!MATCH_POSITION_SET.has(player.position)) throw new Error(`Posição natural inválida de ${player.name}.`);
+  assertRange(player.condition, 0, 100, `Condição de ${player.name}`);
+  assertRange(player.feet.left, 0, 1_000, `Pé esquerdo de ${player.name}`);
+  assertRange(player.feet.right, 0, 1_000, `Pé direito de ${player.name}`);
+  if (Math.max(player.feet.left, player.feet.right) < 100) {
+    throw new Error(`${player.name} precisa ter ao menos um pé utilizável.`);
+  }
+  assertRange(player.body.heightCm, 145, 220, `Altura de ${player.name}`);
+  assertRange(player.body.massKg, 45, 130, `Massa de ${player.name}`);
+  for (const attribute of PLAYER_ATTRIBUTE_KEYS) {
+    assertRange(player.attributes[attribute], 1, 100, `${attribute} de ${player.name}`);
+  }
+  if (new Set(player.traits).size !== player.traits.length) {
+    throw new Error(`${player.name} possui traços duplicados.`);
+  }
+  for (const trait of player.traits) {
+    if (!PLAYER_TRAIT_SET.has(trait)) throw new Error(`Traço desconhecido em ${player.name}: ${trait}.`);
+  }
+  const familiarities = Object.entries(player.positionFamiliarity);
+  if (familiarities.length === 0 || player.positionFamiliarity[player.position] === undefined) {
+    throw new Error(`${player.name} precisa ter familiaridade declarada em sua posição natural.`);
+  }
+  for (const [position, familiarity] of familiarities) {
+    if (!MATCH_POSITION_SET.has(position)) throw new Error(`Zona de familiaridade desconhecida de ${player.name}: ${position}.`);
+    assertRange(familiarity ?? Number.NaN, 0, 100, `Familiaridade ${position} de ${player.name}`);
+  }
+}
+
+function validateInstructions(instructions: IndividualInstructions, label: string) {
+  assertRange(instructions.risk, 0, 100, `Risco individual de ${label}`);
+  assertRange(instructions.dribble, 0, 100, `Drible individual de ${label}`);
+  assertRange(instructions.cross, 0, 100, `Cruzamento individual de ${label}`);
+  assertRange(instructions.shoot, 0, 100, `Finalização individual de ${label}`);
+  assertRange(instructions.pressing, 0, 100, `Pressão individual de ${label}`);
+  if (!["narrow", "balanced", "wide"].includes(instructions.width)) {
+    throw new Error(`Largura individual inválida para ${label}.`);
+  }
+  if (!["hold", "balanced", "get_forward"].includes(instructions.movement)) {
+    throw new Error(`Movimento individual inválido para ${label}.`);
+  }
+}
+
+function validateAssignment(assignment: RoleAssignment, playerIds: Set<string>, label: string) {
+  if (!playerIds.has(assignment.playerId)) throw new Error(`Função atribuída a jogador desconhecido em ${label}.`);
+  if (!PLAYER_ROLE_SET.has(assignment.role)) throw new Error(`Função desconhecida em ${label}: ${assignment.role}.`);
+  if (!MATCH_POSITION_SET.has(assignment.position)) throw new Error(`Posição desconhecida em ${label}: ${assignment.position}.`);
+  if ((assignment.position === "GK") !== (assignment.role === "goalkeeper")) {
+    throw new Error(`A função de goleiro deve ocupar exclusivamente a posição GK em ${label}.`);
+  }
+  assertRange(assignment.tacticalFamiliarity, 0, 100, `Familiaridade tática de ${assignment.playerId}`);
+  validateInstructions(assignment.instructions, assignment.playerId);
+}
+
+export function validateTacticalPlan(tactics: TacticalPlan, label = "equipe") {
+  if (!tactics.formation.trim()) throw new Error(`Formação inválida de ${label}.`);
+  if (!["defensive", "balanced", "attacking"].includes(tactics.mentality)) {
+    throw new Error(`Mentalidade inválida de ${label}.`);
+  }
+  for (const [name, value] of [
+    ["Risco tático", tactics.risk],
+    ["Ritmo", tactics.tempo],
+    ["Largura", tactics.width],
+    ["Linha defensiva", tactics.defensiveLine],
+    ["Linha de pressão", tactics.pressingLine],
+    ["Intensidade de pressão", tactics.pressingIntensity],
+    ["Liberdade criativa", tactics.creativeFreedom],
+  ] as const) {
+    assertRange(value, 0, 100, `${name} de ${label}`);
+  }
+  if (!["short", "mixed", "direct"].includes(tactics.passingStyle)) {
+    throw new Error(`Estilo de passe inválido de ${label}.`);
+  }
+  if (!["balanced", "center", "flanks"].includes(tactics.attackingFocus)) {
+    throw new Error(`Foco de ataque inválido de ${label}.`);
+  }
+  if (!["hold", "balanced", "counter"].includes(tactics.transitionStyle)) {
+    throw new Error(`Transição inválida de ${label}.`);
+  }
+}
+
 export function validateTeamSnapshot(team: TeamSnapshot) {
   if (!team.id || !team.name) throw new Error("Equipe sem identidade válida.");
   if (team.players.length !== 11) throw new Error(`${team.name} deve ter exatamente 11 jogadores.`);
-  if (team.players.filter((player) => player.position === "GK").length !== 1) {
-    throw new Error(`${team.name} deve ter exatamente um goleiro.`);
-  }
+  if (team.bench.length > 12) throw new Error(`${team.name} pode relacionar no máximo 12 reservas.`);
 
   const playerIds = new Set<string>();
-  for (const player of team.players) {
-    if (!player.id || !player.name) throw new Error(`Jogador inválido em ${team.name}.`);
-    if (player.teamId !== team.id) throw new Error(`${player.name} está associado à equipe errada.`);
-    if (playerIds.has(player.id)) throw new Error(`Jogador duplicado: ${player.id}.`);
-    playerIds.add(player.id);
-    assertRange(player.condition, 0, 100, `Condição de ${player.name}`);
-    assertRange(player.feet.left, 0, 1_000, `Pé esquerdo de ${player.name}`);
-    assertRange(player.feet.right, 0, 1_000, `Pé direito de ${player.name}`);
-    if (Math.max(player.feet.left, player.feet.right) < 100) {
-      throw new Error(`${player.name} precisa ter ao menos um pé utilizável.`);
+  for (const player of [...team.players, ...team.bench]) validatePlayer(player, team, playerIds);
+
+  if (team.assignments.length !== 11) {
+    throw new Error(`${team.name} deve ter exatamente 11 atribuições de função.`);
+  }
+  const activeIds = new Set(team.players.map((player) => player.id));
+  const assignedIds = new Set<string>();
+  for (const assignment of team.assignments) {
+    validateAssignment(assignment, activeIds, team.name);
+    if (assignedIds.has(assignment.playerId)) throw new Error(`Função duplicada para ${assignment.playerId}.`);
+    assignedIds.add(assignment.playerId);
+  }
+  if (team.assignments.filter((assignment) => assignment.position === "GK").length !== 1) {
+    throw new Error(`${team.name} deve escalar exatamente um goleiro.`);
+  }
+  validateTacticalPlan(team.tactics, team.name);
+}
+
+function validateInterventions(input: MatchInput) {
+  const knownTeams = new Map([[input.home.id, input.home], [input.away.id, input.away]]);
+  const interventionIds = new Set<string>();
+  const runtime = new Map([...knownTeams].map(([teamId, team]) => [teamId, {
+    active: new Set(team.players.map((player) => player.id)),
+    bench: new Set(team.bench.map((player) => player.id)),
+    assignments: new Map(team.assignments.map((assignment) => [assignment.playerId, assignment])),
+    tactics: team.tactics,
+    substitutions: 0,
+  }]));
+  const ordered = [...input.interventions].map((intervention, index) => ({ intervention, index }))
+    .sort((left, right) => left.intervention.clockMs - right.intervention.clockMs || left.index - right.index);
+
+  for (const { intervention } of ordered) {
+    if (!intervention.id || interventionIds.has(intervention.id)) {
+      throw new Error(`Intervenção sem ID único: ${intervention.id || "vazio"}.`);
     }
-    assertRange(player.body.heightCm, 145, 220, `Altura de ${player.name}`);
-    assertRange(player.body.massKg, 45, 130, `Massa de ${player.name}`);
-    for (const attribute of PLAYER_ATTRIBUTE_KEYS) {
-      assertRange(player.attributes[attribute], 1, 100, `${attribute} de ${player.name}`);
+    interventionIds.add(intervention.id);
+    assertRange(intervention.clockMs, 1, MATCH_DURATION_MS - 1, `Relógio de ${intervention.id}`);
+    const team = knownTeams.get(intervention.teamId);
+    const state = runtime.get(intervention.teamId);
+    if (!team || !state) throw new Error(`Intervenção ${intervention.id} pertence a equipe desconhecida.`);
+
+    if (intervention.type === "substitution") {
+      state.substitutions += 1;
+      if (state.substitutions > 5) throw new Error(`${team.name} excedeu cinco substituições.`);
+      if (!state.active.has(intervention.playerOutId)) {
+        throw new Error(`${intervention.playerOutId} não está em campo em ${intervention.id}.`);
+      }
+      if (!state.bench.has(intervention.playerInId)) {
+        throw new Error(`${intervention.playerInId} não está no banco em ${intervention.id}.`);
+      }
+      if (intervention.assignment.playerId !== intervention.playerInId) {
+        throw new Error(`A nova função de ${intervention.id} não pertence ao jogador que entra.`);
+      }
+      validateAssignment(intervention.assignment, state.bench, team.name);
+      state.active.delete(intervention.playerOutId);
+      state.bench.delete(intervention.playerInId);
+      state.active.add(intervention.playerInId);
+      state.assignments.delete(intervention.playerOutId);
+      state.assignments.set(intervention.playerInId, intervention.assignment);
+    } else {
+      if (Object.keys(intervention.changes).length === 0 && intervention.assignmentChanges.length === 0) {
+        throw new Error(`Intervenção tática vazia: ${intervention.id}.`);
+      }
+      state.tactics = Object.freeze({ ...state.tactics, ...intervention.changes });
+      validateTacticalPlan(state.tactics, team.name);
+      const changedIds = new Set<string>();
+      for (const assignment of intervention.assignmentChanges) {
+        if (changedIds.has(assignment.playerId)) {
+          throw new Error(`Mudança tática duplicada para ${assignment.playerId} em ${intervention.id}.`);
+        }
+        changedIds.add(assignment.playerId);
+        validateAssignment(assignment, state.active, team.name);
+        state.assignments.set(assignment.playerId, assignment);
+      }
+    }
+
+    if (state.assignments.size !== 11
+      || [...state.assignments.values()].filter((assignment) => assignment.position === "GK").length !== 1) {
+      throw new Error(`${team.name} ficou sem uma escalação válida após ${intervention.id}.`);
     }
   }
-
-  assertRange(team.tactics.risk, 0, 100, `Risco tático de ${team.name}`);
-  assertRange(team.tactics.tempo, 0, 100, `Ritmo de ${team.name}`);
 }
 
 export function validateMatchInput(input: MatchInput) {
@@ -329,8 +578,14 @@ export function validateMatchInput(input: MatchInput) {
   validateTeamSnapshot(input.home);
   validateTeamSnapshot(input.away);
 
-  const allPlayerIds = [...input.home.players, ...input.away.players].map((player) => player.id);
+  const allPlayerIds = [
+    ...input.home.players,
+    ...input.home.bench,
+    ...input.away.players,
+    ...input.away.bench,
+  ].map((player) => player.id);
   if (new Set(allPlayerIds).size !== allPlayerIds.length) {
     throw new Error("Os jogadores das duas equipes devem ter IDs únicos.");
   }
+  validateInterventions(input);
 }
