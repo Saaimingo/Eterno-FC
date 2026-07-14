@@ -128,6 +128,7 @@ export type MarketOffer = { id: string; playerId: string; fromClubId: string; as
 export type IncomingBid = { id: string; playerId: string; fromClubId: string; fee: number; expiresAt: string };
 export type JobVacancy = { id: string; clubId: string; openedAt: string; minimumReputation: number; status: "open" | "offered" };
 export type ManagerClubRecord = { clubId: string; fromSeason: number; toSeason?: number; matches: number; wins: number; trophies: number };
+export type BoardObjective = { id: "promotion" | "position" | "finances" | "academy"; label: string; weight: number; status: "em andamento" | "cumprida" | "não cumprida" };
 
 export type GameState = {
   version: 2;
@@ -164,6 +165,7 @@ export type GameState = {
   weeklyIncome: number;
   weeklyExpenses: number;
   boardConfidence: number;
+  boardObjectives: BoardObjective[];
   academyLevel: number;
   reputation: number;
   lastFive: Array<"V" | "E" | "D">;
