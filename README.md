@@ -39,6 +39,7 @@ Requer Node.js 22.13 ou superior.
 ```bash
 npm install
 npm run lint
+npm run typecheck
 npm test
 ```
 

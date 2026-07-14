@@ -107,7 +107,7 @@ export type Competition = {
 export type NewsItem = {
   id: string;
   date: string;
-  category: "clube" | "mercado" | "base" | "competição" | "carreira";
+  category: "clube" | "elenco" | "mercado" | "base" | "competição" | "carreira";
   title: string;
   body: string;
   unread: boolean;

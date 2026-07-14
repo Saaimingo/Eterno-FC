@@ -195,12 +195,11 @@ function buildSeason(clubs: Club[], season: number, qualification?: SeasonQualif
     leagueRunnerUpId:qualification?.brazilLeagueRunnerUp??ranked("BRA-A")[1],
     cupChampionId:qualification?.brazilCupChampion??ranked("BRA-A")[2],
   });
-  const regionalCups= BRAZIL_2026.regionals
-    .map((rule)=>{
+  const regionalCups:Competition[]=BRAZIL_2026.regionals
+    .flatMap((rule)=>{
       const participants=regionalEligibleClubs(clubs,rule.stateCodes,continentalBrazilianClubIds).slice(0,rule.expectedParticipants).map((club)=>club.id);
-      if(participants.length<2)return undefined;const competition={...makeCompetition(rule.id,rule.name,rule.short,"cup","Brasil",season,participants,dateForSeason(season,rule.openingDate)),formatId:"regional-cup-2026" as const};competition.groups=createCompetitionGroups(competition,REGIONAL_CUP_FORMATS_2026[rule.id].groupCount);competition.currentStage="Fase de grupos";competition.groupStage="Fase de grupos";competition.groupAdvancing=REGIONAL_CUP_FORMATS_2026[rule.id].advancingPerGroup;return competition;
-    })
-    .filter((competition):competition is Competition=>Boolean(competition));
+      if(participants.length<2)return[];const competition:Competition={...makeCompetition(rule.id,rule.name,rule.short,"cup","Brasil",season,participants,dateForSeason(season,rule.openingDate)),formatId:"regional-cup-2026"};competition.groups=createCompetitionGroups(competition,REGIONAL_CUP_FORMATS_2026[rule.id].groupCount);competition.currentStage="Fase de grupos";competition.groupStage="Fase de grupos";competition.groupAdvancing=REGIONAL_CUP_FORMATS_2026[rule.id].advancingPerGroup;return[competition];
+    });
   const seededStateRoutes=Object.entries(BRAZIL_STATE_CUP_SLOTS).map(([stateCode,slots])=>({stateCode,slots,rankedClubIds:clubs.filter((club)=>club.country==="Brasil"&&club.state===stateCode).sort((a,b)=>b.reputation-a.reputation).map((club)=>club.id)}));
   const brazilCupSelection=selectBrazilCupEntrants(clubs.filter((club)=>club.country==="Brasil"),qualification?.brazilCupProtected,qualification?.brazilCupStateRoutes??seededStateRoutes),brazilCup={...makeCompetition(BRAZIL_2026.nationalCup.id,BRAZIL_2026.nationalCup.name,BRAZIL_2026.nationalCup.short,"cup","Brasil",season,brazilCupSelection.all,dateForSeason(season,BRAZIL_2026.nationalCup.openingDate)),formatId:"brazil-cup-2026" as const,currentStage:"1ª fase",entryWaves:{"2ª fase":brazilCupSelection.secondPhase,"3ª fase":brazilCupSelection.thirdPhase,"5ª fase":brazilCupSelection.fifthPhase}};
   const cup = SEASON_2026.cups;
