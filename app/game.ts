@@ -5,6 +5,7 @@ import { BRAZIL_2026, brazilianDivisionSchedule, brazilianTransitionRules, regio
 import { divisionShortfall, resolveLeagueTransitions, type LeagueTransitionRule } from "./rules/league-transitions";
 import { buildTwoLeggedTies, resolveTwoLeggedTies } from "./rules/two-legged-ties";
 import { BRAZIL_CUP_2026_FORMAT, selectBrazilCupEntrants } from "./rules/brazil-cup-2026";
+import { REGIONAL_CUP_FORMATS_2026 } from "./rules/regional-cups-2026";
 import type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, Intensity, JobVacancy, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
 
 export type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, IncomingBid, Intensity, JobVacancy, League, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
@@ -128,6 +129,10 @@ function makeGroupedRoundRobin(competition:Competition,startDate:string,interval
   });
 }
 
+function createCompetitionGroups(competition:Competition,groupCount:number){const random=seededRandom(`${competition.id}-${competition.season}-groups`),shuffled=[...competition.participantIds].sort(()=>random()-.5),groups=Object.fromEntries(Array.from({length:groupCount},(_,index)=>[`Grupo ${String(index+1).padStart(2,"0")}`,[] as string[]]));shuffled.forEach((clubId,index)=>groups[`Grupo ${String(index%groupCount+1).padStart(2,"0")}`].push(clubId));return groups;}
+
+function makeRegionalGroupFixtures(competition:Competition,startDate:string):Fixture[]{const format=REGIONAL_CUP_FORMATS_2026[competition.id],groups=competition.groups??createCompetitionGroups(competition,format.groupCount),entries=Object.entries(groups);competition.groups=groups;competition.currentStage="Fase de grupos";if(format.groupSchedule==="within")return entries.flatMap(([,ids],index)=>makeRoundRobin({...competition,id:`${competition.id}-G${index+1}`,participantIds:ids},startDate,7,false).map((fixture)=>({...fixture,competitionId:competition.id,stage:"Fase de grupos",id:`${competition.id}-${competition.season}-g${index+1}-${fixture.round}-${fixture.homeId}-${fixture.awayId}`})));const pairs=Array.from({length:entries.length/2},(_,index)=>[entries[index*2],entries[index*2+1]] as const);return pairs.flatMap(([[,first],[,second]],pairIndex)=>Array.from({length:first.length},(_,round)=>first.map((clubId,index)=>{const opponent=second[(index+round)%second.length],swap=(round+index)%2===1;return{id:`${competition.id}-${competition.season}-x${pairIndex+1}-r${round+1}-${index+1}`,competitionId:competition.id,stage:"Fase de grupos",round:round+1,date:datePlusDays(startDate,round*7),homeId:swap?opponent:clubId,awayId:swap?clubId:opponent,played:false,homeGoals:null,awayGoals:null};})).flat());}
+
 function stageName(teamCount: number, preliminary = false) {
   if(preliminary) return "Fase preliminar";
   if(teamCount>32)return`Fase de ${teamCount}`;if(teamCount===32)return"16-avos";if(teamCount===16)return"Oitavas";if(teamCount===8)return"Quartas";if(teamCount===4)return"Semifinal";return"Final";
@@ -176,7 +181,7 @@ function buildSeason(clubs: Club[], season: number, qualification?: SeasonQualif
   const regionalCups= BRAZIL_2026.regionals
     .map((rule)=>{
       const participants=regionalEligibleClubs(clubs,rule.stateCodes,continentalBrazilianClubIds).slice(0,rule.expectedParticipants).map((club)=>club.id);
-      return participants.length>=2?makeCompetition(rule.id,rule.name,rule.short,"cup","Brasil",season,participants,dateForSeason(season,rule.openingDate)):undefined;
+      if(participants.length<2)return undefined;const competition={...makeCompetition(rule.id,rule.name,rule.short,"cup","Brasil",season,participants,dateForSeason(season,rule.openingDate)),formatId:"regional-cup-2026" as const};competition.groups=createCompetitionGroups(competition,REGIONAL_CUP_FORMATS_2026[rule.id].groupCount);competition.currentStage="Fase de grupos";return competition;
     })
     .filter((competition):competition is Competition=>Boolean(competition));
   const brazilCupSelection=selectBrazilCupEntrants(clubs.filter((club)=>club.country==="Brasil"),qualification?.brazilCupProtected),brazilCup={...makeCompetition(BRAZIL_2026.nationalCup.id,BRAZIL_2026.nationalCup.name,BRAZIL_2026.nationalCup.short,"cup","Brasil",season,brazilCupSelection.all,dateForSeason(season,BRAZIL_2026.nationalCup.openingDate)),formatId:"brazil-cup-2026" as const,currentStage:"1ª fase",entryWaves:{"2ª fase":brazilCupSelection.secondPhase,"3ª fase":brazilCupSelection.thirdPhase,"5ª fase":brazilCupSelection.fifthPhase}};
@@ -190,7 +195,7 @@ function buildSeason(clubs: Club[], season: number, qualification?: SeasonQualif
     makeCompetition(cup.sudamericana.id,cup.sudamericana.name,cup.sudamericana.short,"continental","América do Sul",season,[...brazilSecondary,...argentinaSecondary],dateForSeason(season,cup.sudamericana.openingDate)),
     makeCompetition(cup.champions.id,cup.champions.name,cup.champions.short,"continental","Europa",season,[...spainPrimary,...italyPrimary],dateForSeason(season,cup.champions.openingDate)),
   ];
-  cups.forEach((cup)=>{ competitions.push(cup); fixtures.push(...(cup.formatId==="brazil-cup-2026"?singleLegRound(cup,brazilCupSelection.firstPhase,"1ª fase",cup.nextRoundDate,1):cupOpening(cup,clubs,cup.nextRoundDate))); });
+  cups.forEach((cup)=>{ competitions.push(cup); fixtures.push(...(cup.formatId==="brazil-cup-2026"?singleLegRound(cup,brazilCupSelection.firstPhase,"1ª fase",cup.nextRoundDate,1):cup.formatId==="regional-cup-2026"?makeRegionalGroupFixtures(cup,cup.nextRoundDate):cupOpening(cup,clubs,cup.nextRoundDate))); });
   return {competitions,fixtures};
 }
 
@@ -203,9 +208,10 @@ export function squadFor(game:GameState,clubId:string,includeAcademy=false) { re
 
 export function calculateStandings(clubs:Club[],fixtures:Fixture[]):Standing[] {
   const map=new Map<string,Standing>(); clubs.forEach((club)=>map.set(club.id,{clubId:club.id,played:0,wins:0,draws:0,losses:0,gf:0,ga:0,gd:0,points:0}));
-  fixtures.filter((fixture)=>fixture.played&&map.has(fixture.homeId)&&map.has(fixture.awayId)).forEach((fixture)=>{
-    const home=map.get(fixture.homeId)!,away=map.get(fixture.awayId)!,hg=fixture.homeGoals??0,ag=fixture.awayGoals??0; home.played+=1;away.played+=1;home.gf+=hg;home.ga+=ag;away.gf+=ag;away.ga+=hg;
-    if(hg>ag){home.wins+=1;home.points+=3;away.losses+=1;}else if(ag>hg){away.wins+=1;away.points+=3;home.losses+=1;}else{home.draws+=1;away.draws+=1;home.points+=1;away.points+=1;}
+  fixtures.filter((fixture)=>fixture.played&&(map.has(fixture.homeId)||map.has(fixture.awayId))).forEach((fixture)=>{
+    const home=map.get(fixture.homeId),away=map.get(fixture.awayId),hg=fixture.homeGoals??0,ag=fixture.awayGoals??0;
+    if(home){home.played+=1;home.gf+=hg;home.ga+=ag;if(hg>ag){home.wins+=1;home.points+=3;}else if(ag>hg)home.losses+=1;else{home.draws+=1;home.points+=1;}}
+    if(away){away.played+=1;away.gf+=ag;away.ga+=hg;if(ag>hg){away.wins+=1;away.points+=3;}else if(hg>ag)away.losses+=1;else{away.draws+=1;away.points+=1;}}
   });
   return [...map.values()].map((row)=>({...row,gd:row.gf-row.ga})).sort((a,b)=>b.points-a.points||b.wins-a.wins||b.gd-a.gd||b.gf-a.gf||a.clubId.localeCompare(b.clubId));
 }
@@ -272,7 +278,7 @@ function scoreFixture(game:GameState,fixture:Fixture,salt="") {
   const random=seededRandom(`${fixture.id}-${game.formation}-${game.mentality}-${game.intensity}-${salt}`);let homeStrength=squadStrength(game,fixture.homeId)+2.3,awayStrength=squadStrength(game,fixture.awayId);
   if(fixture.homeId===game.userClubId)homeStrength+=tacticModifier(game)*5;if(fixture.awayId===game.userClubId)awayStrength+=tacticModifier(game)*5;
   const diff=homeStrength-awayStrength;let homeGoals=poisson(clamp(1.3+diff/22+(fixture.homeId===game.userClubId?tacticModifier(game):0),.15,3.8),random);let awayGoals=poisson(clamp(1.02-diff/25+(fixture.awayId===game.userClubId?tacticModifier(game):0),.12,3.5),random);
-  const competition=game.competitions.find((item)=>item.id===fixture.competitionId);if(competition&&(competition.type==="cup"||competition.type==="continental")&&homeGoals===awayGoals){if(random()>.5)homeGoals+=1;else awayGoals+=1;}
+  const competition=game.competitions.find((item)=>item.id===fixture.competitionId),singleLegKnockout=competition&&(competition.type==="cup"||competition.type==="continental")&&fixture.stage!=="Fase de grupos"&&!fixture.tieId;if(singleLegKnockout&&homeGoals===awayGoals){if(random()>.5)homeGoals+=1;else awayGoals+=1;}
   return{homeGoals,awayGoals,random,homeStrength,awayStrength};
 }
 
@@ -301,7 +307,7 @@ function playFixture(game:GameState,fixture:Fixture,salt:string):Fixture{const s
 
 function advanceCups(game:GameState,fixtures:Fixture[],competitions:Competition[]) {
   const nextFixtures=[...fixtures];const nextCompetitions=competitions.map((competition)=>({...competition,pendingByes:[...competition.pendingByes]}));
-  nextCompetitions.filter((competition)=>(competition.type==="cup"||competition.type==="continental")&&!competition.complete&&competition.formatId!=="brazil-cup-2026").forEach((competition)=>{
+  nextCompetitions.filter((competition)=>(competition.type==="cup"||competition.type==="continental")&&!competition.complete&&!competition.formatId).forEach((competition)=>{
     const stageFixtures=nextFixtures.filter((fixture)=>fixture.competitionId===competition.id&&fixture.stage===competition.currentStage);if(!stageFixtures.length||stageFixtures.some((fixture)=>!fixture.played))return;
     const winners=stageFixtures.map((fixture)=>(fixture.homeGoals??0)>(fixture.awayGoals??0)?fixture.homeId:fixture.awayId);const nextTeams=[...competition.pendingByes,...winners];competition.pendingByes=[];
     if(nextTeams.length===1){competition.complete=true;competition.championId=nextTeams[0];competition.currentStage="Campeão";return;}
@@ -319,6 +325,17 @@ function advanceBrazilCup(game:GameState,fixtures:Fixture[],competitions:Competi
   if(competition.currentStage==="Final"){competition.complete=true;competition.championId=winners[0];competition.currentStage="Campeão";return{fixtures:nextFixtures,competitions:nextCompetitions};}
   const nextStages:Record<string,string>={"1ª fase":"2ª fase","2ª fase":"3ª fase","3ª fase":"4ª fase","4ª fase":"5ª fase","5ª fase":"Oitavas","Oitavas":"Quartas","Quartas":"Semifinal","Semifinal":"Final"},nextStage=nextStages[competition.currentStage];if(!nextStage)return{fixtures:nextFixtures,competitions:nextCompetitions};const teams=[...winners,...(competition.entryWaves?.[nextStage]??[])],lastDate=stageFixtures.reduce((latest,fixture)=>fixture.date>latest?fixture.date:latest,stageFixtures[0].date),date=datePlusDays(lastDate,7),round=Math.max(...stageFixtures.map((fixture)=>fixture.round))+1;competition.currentStage=nextStage;
   if(BRAZIL_CUP_2026_FORMAT.twoLeggedStages.includes(nextStage as typeof BRAZIL_CUP_2026_FORMAT.twoLeggedStages[number]))nextFixtures.push(...buildTwoLeggedTies({competitionId:competition.id,season:competition.season,stage:nextStage,round,firstLegDate:date,pairs:pairTeams(teams)}));else nextFixtures.push(...singleLegRound(competition,teams,nextStage,date,round));
+  return{fixtures:nextFixtures,competitions:nextCompetitions};
+}
+
+function advanceRegionalCups(game:GameState,fixtures:Fixture[],competitions:Competition[]){
+  const nextFixtures=[...fixtures],nextCompetitions=competitions.map((competition)=>({...competition,groups:competition.groups?Object.fromEntries(Object.entries(competition.groups).map(([group,ids])=>[group,[...ids]])):undefined}));
+  nextCompetitions.filter((competition)=>competition.formatId==="regional-cup-2026"&&!competition.complete).forEach((competition)=>{const stageFixtures=nextFixtures.filter((fixture)=>fixture.competitionId===competition.id&&fixture.stage===competition.currentStage);if(!stageFixtures.length||stageFixtures.some((fixture)=>!fixture.played))return;const format=REGIONAL_CUP_FORMATS_2026[competition.id],tieBreaker=(first:string,second:string)=>squadStrength(game,first)>=squadStrength(game,second)?first:second;let winners:string[];
+    if(competition.currentStage==="Fase de grupos")winners=Object.values(competition.groups??{}).flatMap((ids)=>calculateStandings(ids.map((id)=>clubById(game,id)),stageFixtures).slice(0,format.advancingPerGroup).map((row)=>row.clubId));else if(competition.currentStage==="Quartas")winners=stageFixtures.map((fixture)=>(fixture.homeGoals??0)>(fixture.awayGoals??0)?fixture.homeId:fixture.awayId);else winners=resolveTwoLeggedTies(stageFixtures,tieBreaker).winners;
+    if(competition.currentStage==="Final"){competition.complete=true;competition.championId=winners[0];competition.currentStage="Campeão";return;}
+    const nextStage=competition.currentStage==="Fase de grupos"?(winners.length===8?"Quartas":"Semifinal"):competition.currentStage==="Quartas"?"Semifinal":"Final",lastDate=stageFixtures.reduce((latest,fixture)=>fixture.date>latest?fixture.date:latest,stageFixtures[0].date),date=datePlusDays(lastDate,7),round=Math.max(...stageFixtures.map((fixture)=>fixture.round))+1,random=seededRandom(`${competition.id}-${competition.season}-${nextStage}`),shuffled=[...winners].sort(()=>random()-.5);competition.currentStage=nextStage;
+    if(nextStage==="Quartas")nextFixtures.push(...singleLegRound(competition,shuffled,nextStage,date,round));else nextFixtures.push(...buildTwoLeggedTies({competitionId:competition.id,season:competition.season,stage:nextStage,round,firstLegDate:date,pairs:pairTeams(shuffled)}));
+  });
   return{fixtures:nextFixtures,competitions:nextCompetitions};
 }
 
@@ -358,7 +375,7 @@ function advanceBrazilianLeagueStages(game:GameState,fixtures:Fixture[],competit
   return{fixtures:nextFixtures,competitions:nextCompetitions};
 }
 
-function advanceCompetitions(game:GameState,fixtures:Fixture[],competitions:Competition[]){const nationalCup=advanceBrazilCup(game,fixtures,competitions),cups=advanceCups({...game,fixtures:nationalCup.fixtures,competitions:nationalCup.competitions},nationalCup.fixtures,nationalCup.competitions);return advanceBrazilianLeagueStages({...game,fixtures:cups.fixtures,competitions:cups.competitions},cups.fixtures,cups.competitions);}
+function advanceCompetitions(game:GameState,fixtures:Fixture[],competitions:Competition[]){const nationalCup=advanceBrazilCup(game,fixtures,competitions),regionals=advanceRegionalCups({...game,fixtures:nationalCup.fixtures,competitions:nationalCup.competitions},nationalCup.fixtures,nationalCup.competitions),cups=advanceCups({...game,fixtures:regionals.fixtures,competitions:regionals.competitions},regionals.fixtures,regionals.competitions);return advanceBrazilianLeagueStages({...game,fixtures:cups.fixtures,competitions:cups.competitions},cups.fixtures,cups.competitions);}
 
 function generateMarketOffers(game:GameState,count=6):MarketOffer[]{const random=seededRandom(`${game.season}-${game.date}-market`);const candidates=game.players.filter((player)=>!player.academy&&player.clubId!==game.userClubId&&(!player.starting||player.listed)).sort(()=>random()-.5).slice(0,count);return candidates.map((player,index)=>({id:`offer-${game.date}-${index}-${player.id}`,playerId:player.id,fromClubId:player.clubId,askingPrice:Math.round(player.value*((player.listed?.86:.96)+random()*.16)),expiresAt:datePlusDays(game.date,28)}));}
 
