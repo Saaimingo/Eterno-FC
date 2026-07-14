@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { divisionShortfall, resolveLeagueTransitions } from "../app/rules/league-transitions.ts";
+import { BRAZIL_2026 } from "../app/rules/brazil-2026.ts";
+import { BRAZILIAN_DIVISION_TARGETS, CLUB_SEEDS } from "../app/world-data.ts";
 
 const rows = (prefix, count) => Array.from({ length: count }, (_, index) => ({ clubId: `${prefix}-${index + 1}` }));
 
@@ -34,4 +36,12 @@ test("calculates how many Serie D entrants are needed after transitions", () => 
   ]);
 
   assert.equal(divisionShortfall("D", rows("old", 96).map((row) => row.clubId), divisions), 4);
+});
+
+test("keeps the 2026 Brazilian pyramid at its configured participant sizes", () => {
+  for (const [divisionId,target] of Object.entries(BRAZILIAN_DIVISION_TARGETS)) {
+    assert.equal(CLUB_SEEDS.filter((club) => club.divisionId === divisionId).length, target);
+  }
+  assert.deepEqual(BRAZIL_2026.serieBPromotion, { directPlaces: 2, playoffPlaces: [3,4,5,6], totalPromoted: 4 });
+  assert.deepEqual(BRAZIL_2026.serieDFormat, { groups: 16, clubsPerGroup: 6, advancingPerGroup: 4, promoted: 6, twoLeggedKnockouts: true });
 });
