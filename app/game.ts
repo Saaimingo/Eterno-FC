@@ -129,7 +129,9 @@ function makeCompetition(id:string,name:string,short:string,type:CompetitionType
   return {id,name,short,type,country,season,participantIds,currentStage:type==="league"||type==="state"?"Liga":"",pendingByes:[],nextRoundDate:date,complete:false};
 }
 
-function buildSeason(clubs: Club[], season: number) {
+type SeasonQualification = { brazilPrimary: string[]; brazilSecondary: string[]; argentinaPrimary: string[]; argentinaSecondary: string[]; spainPrimary: string[]; italyPrimary: string[] };
+
+function buildSeason(clubs: Club[], season: number, qualification?: SeasonQualification) {
   const competitions:Competition[]=[]; const fixtures:Fixture[]=[];
   LEAGUE_SEEDS.forEach((league)=>{
     const participants=clubs.filter((club)=>club.divisionId===league.id).map((club)=>club.id);
@@ -148,10 +150,11 @@ function buildSeason(clubs: Club[], season: number) {
   const brazil=clubs.filter((club)=>club.country==="Brasil").map((club)=>club.id);
   const spain=clubs.filter((club)=>club.country==="Espanha").map((club)=>club.id);
   const italy=clubs.filter((club)=>club.country==="Itália").map((club)=>club.id);
-  const brazilTop=clubs.filter((club)=>club.divisionId==="BRA-A").sort((a,b)=>b.reputation-a.reputation);
-  const argentina=clubs.filter((club)=>club.divisionId==="ARG-1").sort((a,b)=>b.reputation-a.reputation);
-  const spainTop=clubs.filter((club)=>club.divisionId==="ESP-1").sort((a,b)=>b.reputation-a.reputation);
-  const italyTop=clubs.filter((club)=>club.divisionId==="ITA-1").sort((a,b)=>b.reputation-a.reputation);
+  const ranked=(divisionId:string)=>clubs.filter((club)=>club.divisionId===divisionId).sort((a,b)=>b.reputation-a.reputation).map((club)=>club.id);
+  const brazilPrimary=qualification?.brazilPrimary??ranked("BRA-A").slice(0,8),brazilSecondary=qualification?.brazilSecondary??ranked("BRA-A").slice(4,12);
+  const argentinaPrimary=qualification?.argentinaPrimary??ranked("ARG-1").slice(0,8),argentinaSecondary=qualification?.argentinaSecondary??ranked("ARG-1").slice(4,12);
+  const spainPrimary=qualification?.spainPrimary??ranked("ESP-1").slice(0,8),italyPrimary=qualification?.italyPrimary??ranked("ITA-1").slice(0,8);
+  const brazilTop=brazilPrimary.map((id)=>clubs.find((club)=>club.id===id)).filter((club):club is Club=>Boolean(club));
   const continentalBrazilianClubIds=new Set(brazilTop.slice(0,8).map((club)=>club.id));
   const regionalCups= BRAZIL_2026.regionals
     .map((rule)=>{
@@ -165,9 +168,9 @@ function buildSeason(clubs: Club[], season: number) {
     makeCompetition(BRAZIL_2026.nationalCup.id,BRAZIL_2026.nationalCup.name,BRAZIL_2026.nationalCup.short,"cup","Brasil",season,brazil,dateForSeason(season,BRAZIL_2026.nationalCup.openingDate)),
     makeCompetition(cup.spain.id,cup.spain.name,cup.spain.short,"cup","Espanha",season,spain,dateForSeason(season,cup.spain.openingDate)),
     makeCompetition(cup.italy.id,cup.italy.name,cup.italy.short,"cup","Itália",season,italy,dateForSeason(season,cup.italy.openingDate)),
-    makeCompetition(cup.libertadores.id,cup.libertadores.name,cup.libertadores.short,"continental","América do Sul",season,[...brazilTop.slice(0,8),...argentina.slice(0,8)].map((club)=>club.id),dateForSeason(season,cup.libertadores.openingDate)),
-    makeCompetition(cup.sudamericana.id,cup.sudamericana.name,cup.sudamericana.short,"continental","América do Sul",season,[...brazilTop.slice(4,12),...argentina.slice(4,12)].map((club)=>club.id),dateForSeason(season,cup.sudamericana.openingDate)),
-    makeCompetition(cup.champions.id,cup.champions.name,cup.champions.short,"continental","Europa",season,[...spainTop.slice(0,8),...italyTop.slice(0,8)].map((club)=>club.id),dateForSeason(season,cup.champions.openingDate)),
+    makeCompetition(cup.libertadores.id,cup.libertadores.name,cup.libertadores.short,"continental","América do Sul",season,[...brazilPrimary,...argentinaPrimary],dateForSeason(season,cup.libertadores.openingDate)),
+    makeCompetition(cup.sudamericana.id,cup.sudamericana.name,cup.sudamericana.short,"continental","América do Sul",season,[...brazilSecondary,...argentinaSecondary],dateForSeason(season,cup.sudamericana.openingDate)),
+    makeCompetition(cup.champions.id,cup.champions.name,cup.champions.short,"continental","Europa",season,[...spainPrimary,...italyPrimary],dateForSeason(season,cup.champions.openingDate)),
   ];
   cups.forEach((cup)=>{ competitions.push(cup); fixtures.push(...cupOpening(cup,clubs,cup.nextRoundDate)); });
   return {competitions,fixtures};
@@ -353,6 +356,12 @@ function reviewBoardObjectives(game: GameState, userPosition: number, outcome: s
   return {reviewed,score};
 }
 
+function qualificationFromTables(tables: Map<string,Standing[]>): SeasonQualification {
+  const ranked=(leagueId:string)=>tables.get(leagueId)?.map((row)=>row.clubId)??[];
+  const brazil=ranked("BRA-A"),argentina=ranked("ARG-1"),spain=ranked("ESP-1"),italy=ranked("ITA-1");
+  return {brazilPrimary:brazil.slice(0,8),brazilSecondary:brazil.slice(8,16),argentinaPrimary:argentina.slice(0,8),argentinaSecondary:argentina.slice(8,16),spainPrimary:spain.slice(0,8),italyPrimary:italy.slice(0,8)};
+}
+
 function seasonFinancialPlan(club: Club, currentLevel: number, nextLevel: number, position: number) {
   const promoted=nextLevel<currentLevel;
   const levelRevenue=[0,44_000_000,20_000_000,8_500_000,3_500_000][nextLevel]??3_500_000;
@@ -374,12 +383,13 @@ function createSerieDEntrants(season: number, count: number): Club[] {
 
 export function startNextSeason(game:GameState):GameState {
   const completed=completeWorldSeason(game);const snapshot={...game,fixtures:completed.fixtures,competitions:completed.competitions} as GameState;const tables=new Map<string,Standing[]>();game.leagues.forEach((league)=>tables.set(league.id,competitionTable(snapshot,league.id)));
+  const qualification=qualificationFromTables(tables);
   const currentLeague=userLeague(game),userTable=tables.get(currentLeague.id)??[],userPosition=userTable.findIndex((row)=>row.clubId===game.userClubId)+1,userRow=userTable.find((row)=>row.clubId===game.userClubId)??{points:0};const champion=clubById(game,userTable[0]?.clubId??game.userClubId);
   const moves=new Map<string,string>();const transitions=[{upper:"BRA-A",lower:"BRA-B",down:4,up:4},{upper:"BRA-B",lower:"BRA-C",down:4,up:4},{upper:"BRA-C",lower:"BRA-D",down:2,up:6},{upper:"ESP-1",lower:"ESP-2",down:3,up:3},{upper:"ITA-1",lower:"ITA-2",down:3,up:3}];transitions.forEach(({upper,lower,down,up})=>{const upperTable=tables.get(upper)??[],lowerTable=tables.get(lower)??[];upperTable.slice(-down).forEach((row)=>moves.set(row.clubId,lower));lowerTable.slice(0,up).forEach((row)=>moves.set(row.clubId,upper));});
   let clubs=game.clubs.map((club)=>moves.has(club.id)?{...club,divisionId:moves.get(club.id)!}:club);const serieDShortfall=Math.max(0,game.clubs.filter((club)=>club.divisionId==="BRA-D").length-clubs.filter((club)=>club.divisionId==="BRA-D").length);clubs=[...clubs,...createSerieDEntrants(game.season+1,serieDShortfall)];const oldDivision=currentLeague.id,newDivision=clubs.find((club)=>club.id===game.userClubId)?.divisionId??oldDivision;const outcome=newDivision!==oldDivision?(game.leagues.find((league)=>league.id===newDivision)!.level<currentLeague.level?"Promovido":"Rebaixado"):`${userPosition}º lugar`;
   const nextSeason=game.season+1,random=seededRandom(`${nextSeason}-aging`);let retired=0;let players=game.players.flatMap((player)=>{if(player.academy)return[{...player,age:player.age+1,rating:clamp(player.rating+(random()>.3?1:0),35,player.potential)}];const age=player.age+1;if(age>=38||(age>=35&&random()>.72)){if(player.clubId===game.userClubId)retired+=1;return[];}const development=age<=24&&player.rating<player.potential?(random()>.24?1:0):age>=32&&random()>.4?-1:0;return[{...player,age,rating:clamp(player.rating+development,38,player.potential),contract:Math.max(1,player.contract-1),goals:0,assists:0,appearances:0,fitness:100,morale:clamp(player.morale+3,45,100),listed:random()>.88}];});
   clubs.forEach((club)=>{const count=players.filter((player)=>player.clubId===club.id&&!player.academy).length;if(count<20)players.push(...makeAcademy(club,nextSeason,20-count).map((player)=>({...player,id:`${player.id}-senior`,academy:false,age:player.age+2,rating:player.rating+5})));});players=[...players.filter((player)=>!(player.clubId===game.userClubId&&player.academy&&player.age>19)),...makeAcademy(clubs.find((club)=>club.id===game.userClubId)!,nextSeason,5)];
-  const world=buildSeason(clubs,nextSeason);const promoted=outcome==="Promovido",relegated=outcome==="Rebaixado";const boardReview=reviewBoardObjectives(game,userPosition,outcome);const nextConfidence=clamp(Math.round(game.boardConfidence*.45+boardReview.score*.55+(promoted?8:relegated?-12:0)),12,94);const managerStatus:GameState["managerStatus"]=relegated&&boardReview.score<35&&nextConfidence<35?"unemployed":game.managerStatus;const record=game.managerRecord.map((item,index)=>index===game.managerRecord.length-1?{...item,toSeason:managerStatus==="unemployed"?game.season:item.toSeason}:item);const futureLeague=game.leagues.find((league)=>league.id===newDivision)!;const futureClub=clubs.find((club)=>club.id===game.userClubId)!;
+  const world=buildSeason(clubs,nextSeason,qualification);const promoted=outcome==="Promovido",relegated=outcome==="Rebaixado";const boardReview=reviewBoardObjectives(game,userPosition,outcome);const nextConfidence=clamp(Math.round(game.boardConfidence*.45+boardReview.score*.55+(promoted?8:relegated?-12:0)),12,94);const managerStatus:GameState["managerStatus"]=relegated&&boardReview.score<35&&nextConfidence<35?"unemployed":game.managerStatus;const record=game.managerRecord.map((item,index)=>index===game.managerRecord.length-1?{...item,toSeason:managerStatus==="unemployed"?game.season:item.toSeason}:item);const futureLeague=game.leagues.find((league)=>league.id===newDivision)!;const futureClub=clubs.find((club)=>club.id===game.userClubId)!;
   const financialPlan=seasonFinancialPlan(futureClub,currentLeague.level,futureLeague.level,userPosition);
   const next:GameState={...game,season:nextSeason,date:`${nextSeason}-01-10`,round:1,clubs,players,fixtures:world.fixtures,competitions:world.competitions,standings:[],history:[...game.history,{season:game.season,club:userClub(game).name,division:currentLeague.name,champion:champion.name,userPosition,userPoints:userRow.points,outcome}],managerStatus,managerRecord:record,lastFive:[],balance:game.balance+financialPlan.sportingBonus,transferBudget:game.transferBudget+financialPlan.transferAllocation,weeklyIncome:financialPlan.weeklyIncome,weeklyExpenses:financialPlan.weeklyExpenses,boardConfidence:nextConfidence,boardObjectives:createBoardObjectives(futureClub,futureLeague),marketOffers:[],incomingBids:[],vacancies:[],jobOffers:[],news:[{id:`season-${nextSeason}`,date:`${nextSeason}-01-10`,category:"carreira" as const,title:`Temporada ${nextSeason}: ${outcome}`,body:`${retired?`${retired} atleta(s) do clube se aposentaram. `:""}A diretoria liberou ${formatMoney(financialPlan.sportingBonus)} pela campanha, com ${formatMoney(financialPlan.transferAllocation)} destinados ao mercado. Metas cumpridas: ${boardReview.score}%.`,unread:true},...game.news].slice(0,120),lastSavedAt:new Date().toISOString()};
   next.standings=refreshUserStandings(next);next.marketOffers=generateMarketOffers(next,8);next.vacancies=generateVacancies(next,5);if(managerStatus==="unemployed")next.jobOffers=next.vacancies.filter((job)=>job.minimumReputation<=next.managerReputation).slice(0,3).map((job)=>makeManagerOffer(next,job));next.date=nextUserFixture(next)?.date??next.date;return next;
