@@ -207,7 +207,7 @@ function SquadView({ game, update }: { game: GameState; update: (next: GameState
 }
 
 function PlayerRow({ player, action, club }: { player: Player; action: React.ReactNode; club?: Club }) {
-  return <div className="player-row"><span><span className="player-avatar">{player.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><span><strong>{player.name}</strong><small>{club ? `${club.name} • ${player.temperament}` : `${player.goals} gols • ${player.temperament}`}</small></span></span><span className="position-tag">{player.position}</span><span>{player.age}</span><span><Rating value={player.rating} /></span><span><Meter value={player.fitness} /></span><span><Meter value={player.morale} mood /></span><span>{formatMoney(player.value)}</span><span>{player.contract} ano{player.contract === 1 ? "" : "s"}</span><span>{action}</span></div>;
+  return <div className="player-row"><span><span className="player-avatar">{player.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><span><strong>{player.name}</strong><small>{player.injuredMatches?`LESIONADO • ${player.injuredMatches} partida(s)`:club ? `${club.name} • ${player.temperament}` : `${player.goals} gols • ${player.temperament}`}</small></span></span><span className="position-tag">{player.position}</span><span>{player.age}</span><span><Rating value={player.rating} /></span><span><Meter value={player.fitness} /></span><span><Meter value={player.morale} mood /></span><span>{formatMoney(player.value)}</span><span>{player.contract} ano{player.contract === 1 ? "" : "s"}</span><span>{action}</span></div>;
 }
 
 function Meter({ value, mood = false }: { value: number; mood?: boolean }) {
