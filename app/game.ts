@@ -218,12 +218,15 @@ function buildSeason(clubs: Club[], season: number, qualification?: SeasonQualif
   return {competitions,fixtures:resolveClubDateConflicts(fixtures)};
 }
 
-export function clubById(game: GameState, id: string) { return game.clubs.find((club)=>club.id===id)!; }
+const clubIndexCache=new WeakMap<Club[],Map<string,Club>>(),squadIndexCache=new WeakMap<Player[],Map<string,Player[]>>();
+function clubIndex(clubs:Club[]){let index=clubIndexCache.get(clubs);if(!index){index=new Map(clubs.map((club)=>[club.id,club]));clubIndexCache.set(clubs,index);}return index;}
+function squadIndex(players:Player[]){let index=squadIndexCache.get(players);if(!index){index=new Map<string,Player[]>();players.forEach((player)=>index!.set(player.clubId,[...(index!.get(player.clubId)??[]),player]));squadIndexCache.set(players,index);}return index;}
+export function clubById(game: GameState, id: string) { return clubIndex(game.clubs).get(id)!; }
 export function userClub(game: GameState) { return clubById(game,game.userClubId); }
 export function leagueById(game: GameState,id:string) { return game.leagues.find((league)=>league.id===id)!; }
 export function userLeague(game:GameState) { return leagueById(game,userClub(game).divisionId); }
 export function competitionById(game:GameState,id:string) { return game.competitions.find((competition)=>competition.id===id)!; }
-export function squadFor(game:GameState,clubId:string,includeAcademy=false) { return game.players.filter((player)=>player.clubId===clubId&&(includeAcademy||!player.academy)); }
+export function squadFor(game:GameState,clubId:string,includeAcademy=false) { const players=squadIndex(game.players).get(clubId)??[];return includeAcademy?players:players.filter((player)=>!player.academy); }
 
 export function calculateStandings(clubs:Club[],fixtures:Fixture[]):Standing[] {
   const map=new Map<string,Standing>(); clubs.forEach((club)=>map.set(club.id,{clubId:club.id,played:0,wins:0,draws:0,losses:0,gf:0,ga:0,gd:0,points:0}));
