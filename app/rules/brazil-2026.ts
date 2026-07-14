@@ -8,6 +8,7 @@ type DivisionSchedule = {
   closingDate: string;
   expectedParticipants: number;
   rounds: number;
+  format: "round-robin" | "groups-and-knockout";
 };
 
 type RegionalRule = {
@@ -35,10 +36,10 @@ export const BRAZIL_2026 = {
     roundIntervalDays: 7,
   },
   divisions: {
-    "BRA-A": { openingDate: "01-28", closingDate: "12-02", expectedParticipants: 20, rounds: 38 },
-    "BRA-B": { openingDate: "03-21", closingDate: "11-28", expectedParticipants: 20, rounds: 38 },
-    "BRA-C": { openingDate: "04-05", closingDate: "10-25", expectedParticipants: 20, rounds: 19 },
-    "BRA-D": { openingDate: "04-05", closingDate: "09-13", expectedParticipants: 96, rounds: 18 },
+    "BRA-A": { openingDate: "01-28", closingDate: "12-02", expectedParticipants: 20, rounds: 38, format: "round-robin" },
+    "BRA-B": { openingDate: "03-21", closingDate: "11-28", expectedParticipants: 20, rounds: 38, format: "round-robin" },
+    "BRA-C": { openingDate: "04-05", closingDate: "10-25", expectedParticipants: 20, rounds: 19, format: "round-robin" },
+    "BRA-D": { openingDate: "04-05", closingDate: "09-13", expectedParticipants: 96, rounds: 18, format: "groups-and-knockout" },
   } satisfies Record<BrazilianDivisionId, DivisionSchedule>,
   regionals: [
     {
@@ -82,6 +83,8 @@ export const BRAZIL_2026 = {
     "BRA-C": { promotedTo: "BRA-B", promotedCount: 4, relegatedTo: "BRA-D", count: 2 },
     "BRA-D": { promotedTo: "BRA-C", promotedCount: 6 },
   },
+  serieBPromotion: { directPlaces: 2, playoffPlaces: [3,4,5,6], totalPromoted: 4 },
+  serieDFormat: { groups: 16, clubsPerGroup: 6, advancingPerGroup: 4, promoted: 6, twoLeggedKnockouts: true },
 } as const;
 
 export function brazilianDivisionSchedule(divisionId: string) {
