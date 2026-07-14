@@ -10,6 +10,18 @@ assert.equal(career.competitions.find((competition)=>competition.id==="BRA-B")?.
 assert.equal(career.competitions.find((competition)=>competition.id==="BRA-D")?.participantIds.length,96);
 assert.equal(career.competitions.find((competition)=>competition.id==="COPA-BR")?.participantIds.length,126);
 
+const regionalExpectations={
+  "REGIONAL-NE":{participants:20,groups:4,groupFixtures:50},
+  "REGIONAL-NCO":{participants:24,groups:4,groupFixtures:60},
+  "REGIONAL-SSE":{participants:12,groups:2,groupFixtures:36},
+};
+for(const [competitionId,expected] of Object.entries(regionalExpectations)){
+  const competition=career.competitions.find((item)=>item.id===competitionId);
+  assert.equal(competition?.participantIds.length,expected.participants);
+  assert.equal(Object.keys(competition?.groups??{}).length,expected.groups);
+  assert.equal(career.fixtures.filter((fixture)=>fixture.competitionId===competitionId&&fixture.stage==="Fase de grupos").length,expected.groupFixtures);
+}
+
 for(let index=0;index<4;index+=1){
   const previous=new Map(career.clubs.map((club)=>[club.id,club.divisionId]));
   career=game.startNextSeason(career);
