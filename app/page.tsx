@@ -38,6 +38,7 @@ import {
   type MatchPlan,
   type Player,
 } from "./game";
+import { loadCareerState, saveCareerState } from "./persistence";
 
 const STORAGE_KEY = "eterno-fc-careers-v2";
 const LEGACY_STORAGE_KEY = "eterno-fc-careers-v1";
@@ -359,8 +360,8 @@ function CareerModal({ game, careers, onClose, onSelect, onCreate, onDelete, onI
 export default function Home() {
   const [careers,setCareers]=useState<GameState[]>([]); const [activeId,setActiveId]=useState(""); const [section,setSection]=useState("Visão geral"); const [ready,setReady]=useState(false); const [careerModal,setCareerModal]=useState(false); const [mobileMenu,setMobileMenu]=useState(false); const [matchPlan,setMatchPlan]=useState<MatchPlan|null>(null); const [minute,setMinute]=useState(0); const [running,setRunning]=useState(false); const [matchSpeed,setMatchSpeed]=useState<"Lenta"|"Normal"|"Rápida"|"Ultra">("Normal"); const game=careers.find((career)=>career.id===activeId)??careers[0];
 
-  useEffect(()=>{ const frame=window.requestAnimationFrame(()=>{ try{ const stored=localStorage.getItem(STORAGE_KEY)??localStorage.getItem(LEGACY_STORAGE_KEY); const parsed=stored?JSON.parse(stored) as unknown[]:[]; if(parsed.length){const migrated=parsed.map(migrateGame);setCareers(migrated);setActiveId(localStorage.getItem(ACTIVE_KEY)??localStorage.getItem(LEGACY_ACTIVE_KEY)??migrated[0].id);}else{const first=createNewGame();setCareers([first]);setActiveId(first.id);} }catch{const first=createNewGame();setCareers([first]);setActiveId(first.id);} setReady(true); }); return()=>window.cancelAnimationFrame(frame); },[]);
-  useEffect(()=>{ if(!ready||!careers.length)return; localStorage.setItem(STORAGE_KEY,JSON.stringify(careers)); localStorage.setItem(ACTIVE_KEY,activeId); },[careers,activeId,ready]);
+  useEffect(()=>{let cancelled=false;const frame=window.requestAnimationFrame(()=>{void(async()=>{try{const persisted=await loadCareerState();const stored=localStorage.getItem(STORAGE_KEY)??localStorage.getItem(LEGACY_STORAGE_KEY),legacy=stored?JSON.parse(stored) as unknown[]:[],source=persisted?.careers?.length?persisted.careers:legacy;if(cancelled)return;if(source.length){const migrated=source.map(migrateGame);setCareers(migrated);setActiveId(persisted?.activeId??localStorage.getItem(ACTIVE_KEY)??localStorage.getItem(LEGACY_ACTIVE_KEY)??migrated[0].id);}else{const first=createNewGame();setCareers([first]);setActiveId(first.id);}}catch{if(cancelled)return;const first=createNewGame();setCareers([first]);setActiveId(first.id);}if(!cancelled)setReady(true);})()});return()=>{cancelled=true;window.cancelAnimationFrame(frame);};},[]);
+  useEffect(()=>{if(!ready||!careers.length)return;void saveCareerState({careers,activeId}).catch(()=>undefined);},[careers,activeId,ready]);
   useEffect(()=>{ if(!running||!matchPlan)return; const delay={Lenta:360,Normal:110,Rápida:48,Ultra:16}[matchSpeed]; const timer=window.setInterval(()=>setMinute((current)=>{ if(current>=90){setRunning(false);return 90;} return Math.min(90,current+1); }),delay); return()=>window.clearInterval(timer); },[running,matchPlan,matchSpeed]);
 
   if(!ready||!game)return <LoadingGame/>;
