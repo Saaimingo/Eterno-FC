@@ -87,6 +87,17 @@ export const BRAZIL_2026 = {
   serieDFormat: { groups: 16, clubsPerGroup: 6, advancingPerGroup: 4, promoted: 6, twoLeggedKnockouts: true },
 } as const;
 
+/**
+ * Distribuição inicial das 102 vagas estaduais da copa nacional.
+ * A ordem representa o ranking de federações usado pelo pacote de 2026.
+ */
+export const BRAZIL_STATE_CUP_SLOTS = {
+  SP:6,RJ:6,
+  MG:5,RS:5,PR:5,
+  SC:4,BA:4,PE:4,CE:4,GO:4,PA:4,AL:4,MT:4,RN:4,
+  SE:3,MA:3,DF:3,PB:3,ES:3,MS:3,PI:3,AM:3,TO:3,AC:3,RO:3,AP:3,RR:3,
+} as const;
+
 export function brazilianDivisionSchedule(divisionId: string) {
   return BRAZIL_2026.divisions[divisionId as BrazilianDivisionId];
 }
