@@ -1,6 +1,7 @@
 import { CLUB_SEEDS, LEAGUE_SEEDS, STATE_NAMES } from "./world-data";
 import { clamp, seededRandom } from "./domain/random";
 import { dateForSeason, SEASON_2026 } from "./rules/season-2026";
+import { BRAZIL_2026, brazilianDivisionSchedule, regionalEligibleClubs } from "./rules/brazil-2026";
 import type { Club, Competition, CompetitionType, Fixture, GameState, Intensity, JobVacancy, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, Position, Standing, TransferEvent } from "./domain/types";
 
 export type { Club, Competition, CompetitionType, Fixture, GameState, IncomingBid, Intensity, JobVacancy, League, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, Position, Standing, TransferEvent } from "./domain/types";
@@ -86,16 +87,17 @@ function buildSeason(clubs: Club[], season: number) {
   const competitions:Competition[]=[]; const fixtures:Fixture[]=[];
   LEAGUE_SEEDS.forEach((league)=>{
     const participants=clubs.filter((club)=>club.divisionId===league.id).map((club)=>club.id);
-    const openingDate=dateForSeason(season,SEASON_2026.league.openingDate);
+    const brazilianSchedule=league.country==="Brasil"?brazilianDivisionSchedule(league.id):undefined;
+    const openingDate=dateForSeason(season,brazilianSchedule?.openingDate??SEASON_2026.league.openingDate);
     const competition={...makeCompetition(league.id,league.name,league.short,"league",league.country,season,participants,openingDate),divisionId:league.id};
     competitions.push(competition); fixtures.push(...makeRoundRobin(competition,openingDate,SEASON_2026.league.roundIntervalDays,SEASON_2026.league.doubleRound));
   });
   Object.entries(STATE_NAMES).forEach(([stateCode,name],index)=>{
     const participants=clubs.filter((club)=>club.country==="Brasil"&&club.state===stateCode).map((club)=>club.id); if(participants.length<2)return;
-    const openingDay=SEASON_2026.brazilianStates.firstDay+(index%3)*SEASON_2026.brazilianStates.dayStep;
-    const openingDate=`${season}-${String(SEASON_2026.brazilianStates.openingMonth).padStart(2,"0")}-${String(openingDay).padStart(2,"0")}`;
+    const openingDay=11+(index%3)*2;
+    const openingDate=`${season}-${BRAZIL_2026.states.openingDate.slice(0,3)}${String(openingDay).padStart(2,"0")}`;
     const competition={...makeCompetition(`STATE-${stateCode}`,name,name.replace("Campeonato ",""),"state","Brasil",season,participants,openingDate),stateCode};
-    competitions.push(competition); fixtures.push(...makeRoundRobin(competition,competition.nextRoundDate,SEASON_2026.brazilianStates.roundIntervalDays,false));
+    competitions.push(competition); fixtures.push(...makeRoundRobin(competition,competition.nextRoundDate,BRAZIL_2026.states.roundIntervalDays,false));
   });
   const brazil=clubs.filter((club)=>club.country==="Brasil").map((club)=>club.id);
   const spain=clubs.filter((club)=>club.country==="Espanha").map((club)=>club.id);
@@ -104,9 +106,17 @@ function buildSeason(clubs: Club[], season: number) {
   const argentina=clubs.filter((club)=>club.divisionId==="ARG-1").sort((a,b)=>b.reputation-a.reputation);
   const spainTop=clubs.filter((club)=>club.divisionId==="ESP-1").sort((a,b)=>b.reputation-a.reputation);
   const italyTop=clubs.filter((club)=>club.divisionId==="ITA-1").sort((a,b)=>b.reputation-a.reputation);
+  const continentalBrazilianClubIds=new Set(brazilTop.slice(0,8).map((club)=>club.id));
+  const regionalCups= BRAZIL_2026.regionals
+    .map((rule)=>{
+      const participants=regionalEligibleClubs(clubs,rule.stateCodes,continentalBrazilianClubIds).slice(0,rule.expectedParticipants).map((club)=>club.id);
+      return participants.length>=2?makeCompetition(rule.id,rule.name,rule.short,"cup","Brasil",season,participants,dateForSeason(season,rule.openingDate)):undefined;
+    })
+    .filter((competition):competition is Competition=>Boolean(competition));
   const cup = SEASON_2026.cups;
   const cups:Competition[]=[
-    makeCompetition(cup.brazil.id,cup.brazil.name,cup.brazil.short,"cup","Brasil",season,brazil,dateForSeason(season,cup.brazil.openingDate)),
+    ...regionalCups,
+    makeCompetition(BRAZIL_2026.nationalCup.id,BRAZIL_2026.nationalCup.name,BRAZIL_2026.nationalCup.short,"cup","Brasil",season,brazil,dateForSeason(season,BRAZIL_2026.nationalCup.openingDate)),
     makeCompetition(cup.spain.id,cup.spain.name,cup.spain.short,"cup","Espanha",season,spain,dateForSeason(season,cup.spain.openingDate)),
     makeCompetition(cup.italy.id,cup.italy.name,cup.italy.short,"cup","Itália",season,italy,dateForSeason(season,cup.italy.openingDate)),
     makeCompetition(cup.libertadores.id,cup.libertadores.name,cup.libertadores.short,"continental","América do Sul",season,[...brazilTop.slice(0,8),...argentina.slice(0,8)].map((club)=>club.id),dateForSeason(season,cup.libertadores.openingDate)),
