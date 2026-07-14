@@ -125,10 +125,10 @@ const argentinaA: RawClub[] = [
 ];
 
 export const LEAGUE_SEEDS: LeagueSeed[] = [
-  { id:"BRA-A", name:"Brasileirão Série A", short:"Série A", country:"Brasil", level:1, relegationTo:"BRA-B", promotionPlaces:0, relegationPlaces:3 },
-  { id:"BRA-B", name:"Brasileirão Série B", short:"Série B", country:"Brasil", level:2, promotionTo:"BRA-A", relegationTo:"BRA-C", promotionPlaces:3, relegationPlaces:3 },
-  { id:"BRA-C", name:"Brasileirão Série C", short:"Série C", country:"Brasil", level:3, promotionTo:"BRA-B", relegationTo:"BRA-D", promotionPlaces:3, relegationPlaces:3 },
-  { id:"BRA-D", name:"Brasileirão Série D", short:"Série D", country:"Brasil", level:4, promotionTo:"BRA-C", promotionPlaces:3, relegationPlaces:0 },
+  { id:"BRA-A", name:"Brasileirão Série A", short:"Série A", country:"Brasil", level:1, relegationTo:"BRA-B", promotionPlaces:0, relegationPlaces:4 },
+  { id:"BRA-B", name:"Brasileirão Série B", short:"Série B", country:"Brasil", level:2, promotionTo:"BRA-A", relegationTo:"BRA-C", promotionPlaces:2, relegationPlaces:4 },
+  { id:"BRA-C", name:"Brasileirão Série C", short:"Série C", country:"Brasil", level:3, promotionTo:"BRA-B", relegationTo:"BRA-D", promotionPlaces:4, relegationPlaces:2 },
+  { id:"BRA-D", name:"Brasileirão Série D", short:"Série D", country:"Brasil", level:4, promotionTo:"BRA-C", promotionPlaces:6, relegationPlaces:0 },
   { id:"ESP-1", name:"Liga Espanhola", short:"La Liga", country:"Espanha", level:1, relegationTo:"ESP-2", promotionPlaces:0, relegationPlaces:3 },
   { id:"ESP-2", name:"Segunda Divisão Espanhola", short:"La Liga 2", country:"Espanha", level:2, promotionTo:"ESP-1", promotionPlaces:3, relegationPlaces:0 },
   { id:"ITA-1", name:"Campeonato Italiano", short:"Serie A", country:"Itália", level:1, relegationTo:"ITA-2", promotionPlaces:0, relegationPlaces:3 },
