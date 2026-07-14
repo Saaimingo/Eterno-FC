@@ -25,6 +25,13 @@ export type LeagueSeed = {
   relegationPlaces: number;
 };
 
+export const BRAZILIAN_DIVISION_TARGETS = {
+  "BRA-A": 20,
+  "BRA-B": 20,
+  "BRA-C": 20,
+  "BRA-D": 96,
+} as const;
+
 type RawClub = [name: string, short: string, city: string, state: string | undefined, reputation: number];
 
 const palettes = [
@@ -47,6 +54,20 @@ function buildDivision(divisionId: string, country: ClubSeed["country"], raw: Ra
       primary: palette[0], secondary: palette[1],
     };
   });
+}
+
+const brazilianFillerCities = [
+  ["AC","Rio Branco"],["AL","Maceió"],["AM","Manaus"],["AP","Macapá"],["BA","Feira de Santana"],["CE","Juazeiro do Norte"],["DF","Brasília"],
+  ["ES","Vila Velha"],["GO","Anápolis"],["MA","São Luís"],["MG","Uberlândia"],["MS","Campo Grande"],["MT","Cuiabá"],["PA","Santarém"],
+  ["PB","Campina Grande"],["PE","Caruaru"],["PI","Teresina"],["PR","Maringá"],["RJ","Volta Redonda"],["RN","Mossoró"],["RO","Porto Velho"],
+  ["RR","Boa Vista"],["RS","Pelotas"],["SC","Blumenau"],["SE","Aracaju"],["SP","Sorocaba"],["TO","Palmas"],
+] as const;
+
+const brazilianFillerNames = ["União","Atlético","Ferroviário","Nacional","Operário","Estrela","Aurora","Independente","Esportivo","Pioneiro","Serrano","Real"] as const;
+
+function completeBrazilianDivision(divisionId:keyof typeof BRAZILIAN_DIVISION_TARGETS,raw:RawClub[],offset:number):ClubSeed[]{
+  const clubs=buildDivision(divisionId,"Brasil",raw,offset),target=BRAZILIAN_DIVISION_TARGETS[divisionId],level=Number(divisionId.at(-1)==="A"?1:divisionId.at(-1)==="B"?2:divisionId.at(-1)==="C"?3:4);
+  return [...clubs,...Array.from({length:Math.max(0,target-clubs.length)},(_,index)=>{const [state,city]=brazilianFillerCities[(index+offset*3)%brazilianFillerCities.length],identity=brazilianFillerNames[(index+offset)%brazilianFillerNames.length],name=`${identity} ${city}`,palette=palettes[(index+offset)%palettes.length],reputation=Math.max(48,82-level*7-(index%8));return{id:`${slug(name)}-${divisionId.toLowerCase()}`,name,short:`${divisionId.at(-1)}${String(index+1).padStart(2,"0")}`,city,state,country:"Brasil",divisionId,reputation,academy:Math.max(44,reputation-5+(index%7)),stadium:`Estádio ${city}`,primary:palette[0],secondary:palette[1]};})];
 }
 
 const brazilA: RawClub[] = [
@@ -116,8 +137,8 @@ export const LEAGUE_SEEDS: LeagueSeed[] = [
 ];
 
 export const CLUB_SEEDS: ClubSeed[] = [
-  ...buildDivision("BRA-A","Brasil",brazilA,0), ...buildDivision("BRA-B","Brasil",brazilB,2),
-  ...buildDivision("BRA-C","Brasil",brazilC,4), ...buildDivision("BRA-D","Brasil",brazilD,6),
+  ...completeBrazilianDivision("BRA-A",brazilA,0), ...completeBrazilianDivision("BRA-B",brazilB,2),
+  ...completeBrazilianDivision("BRA-C",brazilC,4), ...completeBrazilianDivision("BRA-D",brazilD,6),
   ...buildDivision("ESP-1","Espanha",spainA,1), ...buildDivision("ESP-2","Espanha",spainB,3),
   ...buildDivision("ITA-1","Itália",italyA,5), ...buildDivision("ITA-2","Itália",italyB,7),
   ...buildDivision("ARG-1","Argentina",argentinaA,9),
