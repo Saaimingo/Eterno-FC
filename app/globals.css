@@ -244,6 +244,7 @@ button:focus-visible { outline: 3px solid #efb54a; outline-offset: 2px; }
 .competition-picker > div { display:flex; align-items:flex-end; flex-direction:column; gap:5px; }.competition-picker > div span { color:#87909e; font-size:7px; text-transform:uppercase; }.competition-picker > div strong { font-family:Georgia,serif; font-size:15px; }
 .full-standing > span:first-child i.promotion-zone { background:var(--green); }.destination { font-size:6px!important; font-weight:900; letter-spacing:.05em; }.destination.up { color:var(--green)!important; }.destination.down { color:var(--red)!important; }
 .cup-bracket { overflow:hidden; }.cup-stage-head { display:flex; min-height:48px; align-items:center; justify-content:space-between; padding:0 18px; border-bottom:1px solid var(--line); }.cup-stage-head span { font-size:8px; font-weight:900; letter-spacing:.12em; }.cup-stage-head strong { color:var(--green); font-size:7px; letter-spacing:.08em; }
+.series-d-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-bottom:14px; }.group-panel { overflow:hidden; }.group-standing { display:grid; min-height:45px; grid-template-columns:28px minmax(150px,1fr) 30px 36px 40px 62px; align-items:center; padding:0 14px; border-top:1px solid var(--line); font-size:8px; }.group-standing.header { min-height:28px; color:#8992a0; background:#f7f5ef; font-size:6px; font-weight:900; }.group-standing.is-us { background:#edf5e8; box-shadow:inset 3px 0 var(--green); }.group-standing > span:nth-child(2) { display:flex; align-items:center; gap:8px; }.group-standing em { color:var(--green); font-size:6px; font-style:normal; font-weight:900; }
 .cup-fixture { display:grid; grid-template-columns:125px 1fr 70px 1fr; align-items:center; min-height:63px; padding:0 18px; border-bottom:1px solid #e9e7e0; }.cup-fixture.is-us { background:#eef5e9; box-shadow:inset 3px 0 var(--green); }.cup-fixture > span { display:flex; flex-direction:column; color:#687386; font-size:8px; font-weight:800; }.cup-fixture > span small { margin-top:4px; color:#9aa1ac; font-size:6px; }.cup-fixture > div { display:flex; align-items:center; justify-content:flex-end; gap:9px; font-size:9px; }.cup-fixture > div:last-child { justify-content:flex-start; }.cup-fixture > b { font-family:Georgia,serif; font-size:15px; text-align:center; }
 
 /* Mercado em movimento */
@@ -265,6 +266,7 @@ button:focus-visible { outline: 3px solid #efb54a; outline-offset: 2px; }
 
 @media (max-width:840px) {
   .competition-picker,.career-current { align-items:stretch; flex-direction:column; }.competition-picker label { min-width:0; width:100%; }.competition-picker > div { align-items:flex-start; }
+  .series-d-groups { grid-template-columns:1fr; }
   .offer-grid,.job-grid,.career-summary { grid-template-columns:1fr; }.career-numbers { min-height:150px; }
   .cup-bracket { overflow-x:auto; }.cup-fixture { min-width:720px; }
   .possession-readout { padding:0 14px; }.possession-readout > b { display:none; }
