@@ -8,6 +8,8 @@ import {
   FatigueTracker,
   adjustPlayerAttributes,
   adjustPlayerFeet,
+  adjustPlayerTraits,
+  attackActionModifier,
   adjustTeamAttributes,
   calculateActionPressure,
   calculateAerialDuelProbability,
@@ -18,6 +20,7 @@ import {
   calculateShotOnTargetProbability,
   createPrototypeMatchInput,
   resolveFootUse,
+  scheduleMatchInterventions,
   simulateEmptyMatch,
   simulateMatch,
   traceCausalChain,
@@ -507,4 +510,235 @@ test("makes contextual specialists measurably better without a scripted star tag
   assert.ok(specialistCrossRate > baselineCrossRate + 0.04);
   assert.ok(specialistDribbleRate > baselineDribbleRate + 0.04);
   assert.ok(sample.specialistHeaders > sample.baselineHeaders * 1.15);
+});
+
+test("validates MP-3 roles, positional familiarity, instructions and the bench", () => {
+  const input = createPrototypeMatchInput("mp3-contracts");
+  assert.equal(input.home.players.length, 11);
+  assert.equal(input.home.bench.length, 7);
+  assert.equal(input.home.assignments.length, 11);
+  assert.equal(new Set(input.home.assignments.map((assignment) => assignment.playerId)).size, 11);
+  assert.equal(input.home.assignments.filter((assignment) => assignment.position === "GK").length, 1);
+  assert.equal(input.home.players.every((player) => player.positionFamiliarity[player.position] === 100), true);
+
+  const player = input.home.players[1];
+  const invalidPlayer = {
+    ...player,
+    positionFamiliarity: { ...player.positionFamiliarity, [player.position]: 101 },
+  };
+  assert.throws(
+    () => validateMatchInput({
+      ...input,
+      home: { ...input.home, players: [input.home.players[0], invalidPlayer, ...input.home.players.slice(2)] },
+    }),
+    /Familiaridade/,
+  );
+
+  const striker = input.home.assignments.find((assignment) => assignment.playerId === "aurora-p11");
+  const winger = input.home.assignments.find((assignment) => assignment.playerId === "aurora-p9");
+  assert.ok(striker && winger);
+  const illegalReentry = scheduleMatchInterventions(input, [{
+    id: "first-sub",
+    type: "substitution",
+    teamId: input.home.id,
+    clockMs: 1_000_000,
+    playerOutId: "aurora-p11",
+    playerInId: "aurora-p18",
+    assignment: { ...striker, playerId: "aurora-p18" },
+  }, {
+    id: "illegal-reentry",
+    type: "substitution",
+    teamId: input.home.id,
+    clockMs: 2_000_000,
+    playerOutId: "aurora-p9",
+    playerInId: "aurora-p11",
+    assignment: { ...winger, playerId: "aurora-p11" },
+  }]);
+  assert.throws(() => validateMatchInput(illegalReentry), /não está no banco/);
+});
+
+test("uses traits to change choice frequency without granting automatic execution quality", () => {
+  const probabilityInput = createPrototypeMatchInput("trait-probability");
+  const crosser = probabilityInput.home.players.find((player) => player.id === "aurora-p10");
+  const marker = probabilityInput.away.players.find((player) => player.position === "LB");
+  assert.ok(crosser && marker);
+  const earlyCrosser = { ...crosser, traits: [...crosser.traits, "early_crosses"] };
+  const baselineExecution = calculateCrossProbability({ crosser, marker, homeAdvantage: 3 });
+  const traitExecution = calculateCrossProbability({ crosser: earlyCrosser, marker, homeAdvantage: 3 });
+  assert.equal(traitExecution.probability, baselineExecution.probability);
+  assert.ok(
+    attackActionModifier(probabilityInput.home, earlyCrosser, "cross")
+      > attackActionModifier(probabilityInput.home, crosser, "cross") + 20,
+  );
+
+  let baselineAttempts = 0;
+  let traitAttempts = 0;
+  for (let index = 0; index < 120; index += 1) {
+    const input = createPrototypeMatchInput(`trait-choice-${index}`);
+    const withoutEarlyCross = adjustPlayerTraits(input.home, "aurora-p10", ["cuts_inside", "runs_with_ball"]);
+    const withEarlyCross = adjustPlayerTraits(input.home, "aurora-p10", ["cuts_inside", "runs_with_ball", "early_crosses"]);
+    const baseline = simulateMatch({ ...input, home: withoutEarlyCross });
+    const changed = simulateMatch({ ...input, home: withEarlyCross });
+    baselineAttempts += baseline.events.filter((event) => event.type === "cross_attempt" && event.actorId === "aurora-p10").length;
+    traitAttempts += changed.events.filter((event) => event.type === "cross_attempt" && event.actorId === "aurora-p10").length;
+  }
+  assert.ok(traitAttempts > baselineAttempts * 1.18);
+});
+
+test("penalizes unfamiliar deployment without erasing the player's attributes", () => {
+  const input = createPrototypeMatchInput("familiarity-execution");
+  const passer = input.home.players.find((player) => player.position === "CM");
+  const receiver = input.home.players.find((player) => player.position === "AM");
+  const defender = input.away.players.find((player) => player.position === "DM");
+  assert.ok(passer && receiver && defender);
+  const familiar = calculatePassProbability({
+    passer,
+    receiver,
+    defender,
+    phase: "creation",
+    tactics: input.home.tactics,
+    homeAdvantage: 3,
+    passerFamiliarity: 96,
+    receiverFamiliarity: 94,
+    defenderFamiliarity: 90,
+  });
+  const improvised = calculatePassProbability({
+    passer,
+    receiver,
+    defender,
+    phase: "creation",
+    tactics: input.home.tactics,
+    homeAdvantage: 3,
+    passerFamiliarity: 18,
+    receiverFamiliarity: 28,
+    defenderFamiliarity: 90,
+  });
+  assert.deepEqual(passer.attributes, input.home.players.find((player) => player.id === passer.id)?.attributes);
+  assert.ok(familiar.probability > improvised.probability + 0.015);
+});
+
+test("applies tactical changes only to future events and records the coach decision causally", () => {
+  const input = createPrototypeMatchInput("future-only-tactics");
+  const wingerAssignment = input.home.assignments.find((assignment) => assignment.playerId === "aurora-p9");
+  assert.ok(wingerAssignment);
+  const clockMs = 3_300_000;
+  const changedInput = scheduleMatchInterventions(input, [{
+    id: "aurora-chase-game",
+    type: "tactical_change",
+    teamId: input.home.id,
+    clockMs,
+    changes: {
+      formation: "4-2-4",
+      mentality: "attacking",
+      risk: 82,
+      tempo: 76,
+      width: 84,
+      pressingLine: 76,
+      pressingIntensity: 78,
+      passingStyle: "direct",
+      attackingFocus: "flanks",
+      transitionStyle: "counter",
+      creativeFreedom: 72,
+    },
+    assignmentChanges: [{
+      ...wingerAssignment,
+      role: "inside_forward",
+      tacticalFamiliarity: 74,
+      instructions: { ...wingerAssignment.instructions, cross: 35, shoot: 78, width: "narrow" },
+    }],
+  }]);
+  const baseline = simulateMatch(input);
+  const changed = simulateMatch(changedInput);
+  const decision = changed.events.find((event) => event.type === "tactical_change");
+  assert.ok(decision);
+  assert.equal(decision.clockMs, clockMs);
+  assert.deepEqual(decision.scoreBefore, decision.scoreAfter);
+  assert.deepEqual(
+    changed.events.filter((event) => event.clockMs < clockMs),
+    baseline.events.filter((event) => event.clockMs < clockMs),
+  );
+  assert.notDeepEqual(
+    changed.events.filter((event) => event.clockMs > clockMs).slice(0, 20),
+    baseline.events.filter((event) => event.clockMs > clockMs).slice(0, 20),
+  );
+  assert.equal(decision.causes.length, 1);
+});
+
+test("keeps substitutes outside the simulation until their canonical entry event", () => {
+  const input = createPrototypeMatchInput("substitution-boundary");
+  const outgoing = input.home.assignments.find((assignment) => assignment.playerId === "aurora-p11");
+  assert.ok(outgoing);
+  const clockMs = 1_800_000;
+  const changedInput = scheduleMatchInterventions(input, [{
+    id: "aurora-super-sub",
+    type: "substitution",
+    teamId: input.home.id,
+    clockMs,
+    playerOutId: "aurora-p11",
+    playerInId: "aurora-p18",
+    assignment: {
+      ...outgoing,
+      playerId: "aurora-p18",
+      role: "poacher",
+      tacticalFamiliarity: 86,
+      instructions: { ...outgoing.instructions, shoot: 82, movement: "get_forward" },
+    },
+  }]);
+  const result = simulateMatch(changedInput);
+  const substitution = result.events.find((event) => event.type === "substitution");
+  assert.ok(substitution);
+  assert.equal(substitution.actorId, "aurora-p11");
+  assert.equal(substitution.targetId, "aurora-p18");
+  assert.equal(result.events.some((event) => event.sequence < substitution.sequence
+    && (event.actorId === "aurora-p18" || event.targetId === "aurora-p18" || event.opponentIds.includes("aurora-p18"))), false);
+  assert.equal(result.events.some((event) => event.sequence > substitution.sequence
+    && (event.actorId === "aurora-p11" || event.targetId === "aurora-p11" || event.opponentIds.includes("aurora-p11"))), false);
+  assert.equal(result.events.some((event) => event.sequence > substitution.sequence
+    && (event.actorId === "aurora-p18" || event.targetId === "aurora-p18")), true);
+
+  const outgoingState = result.finalState.players.find((player) => player.playerId === "aurora-p11");
+  const incomingState = result.finalState.players.find((player) => player.playerId === "aurora-p18");
+  assert.equal(outgoingState?.status, "substituted");
+  assert.equal(outgoingState?.exitedAtMs, clockMs);
+  assert.equal(incomingState?.status, "active");
+  assert.equal(incomingState?.enteredAtMs, clockMs);
+  assert.equal(incomingState?.role, "poacher");
+});
+
+test("makes a flank intervention measurable without turning it into a guaranteed win", () => {
+  let baselineCrosses = 0;
+  let changedCrosses = 0;
+  let changedWins = 0;
+  let changedNonWins = 0;
+  const clockMs = 2_700_001;
+
+  for (let index = 0; index < 100; index += 1) {
+    const input = createPrototypeMatchInput(`coach-sensitivity-${index}`);
+    const changedInput = scheduleMatchInterventions(input, [{
+      id: `wide-${index}`,
+      type: "tactical_change",
+      teamId: input.home.id,
+      clockMs,
+      changes: {
+        mentality: "attacking",
+        width: 100,
+        attackingFocus: "flanks",
+        tempo: 68,
+        risk: 64,
+      },
+      assignmentChanges: [],
+    }]);
+    const baseline = simulateMatch(input);
+    const changed = simulateMatch(changedInput);
+    baselineCrosses += baseline.events.filter((event) => event.clockMs > clockMs
+      && event.teamId === input.home.id && event.type === "cross_attempt").length;
+    changedCrosses += changed.events.filter((event) => event.clockMs > clockMs
+      && event.teamId === input.home.id && event.type === "cross_attempt").length;
+    if (changed.finalState.score[0] > changed.finalState.score[1]) changedWins += 1;
+    else changedNonWins += 1;
+  }
+
+  assert.ok(changedCrosses > baselineCrosses * 1.12);
+  assert.ok(changedWins > 0);
+  assert.ok(changedNonWins > 0);
 });

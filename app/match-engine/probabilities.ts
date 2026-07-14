@@ -5,6 +5,7 @@ import type {
   TeamSnapshot,
 } from "./contracts";
 import { resolveFootUse, type FootUse } from "./feet";
+import { assignmentFor, effectiveFamiliarity } from "./tactics";
 
 export type ProbabilityBreakdown = Readonly<{
   probability: number;
@@ -19,6 +20,7 @@ type ExecutionContext = Readonly<{
   fatigue?: number;
   pressure?: number;
   foot?: FootUse;
+  familiarity?: number;
 }>;
 
 function clamp(value: number, minimum: number, maximum: number) {
@@ -43,17 +45,20 @@ function executionScore(
 ) {
   const fatigue = clamp(context.fatigue ?? 0, 0, 100);
   const pressure = clamp(context.pressure ?? 0, 0, 100);
+  const familiarity = clamp(context.familiarity ?? 100, 0, 100);
   const composureResistance = 0.35 + player.attributes.composure / 155;
   const fatiguePenalty = fatigue * (1.08 - player.attributes.stamina / 180) * 0.2;
   const pressurePenalty = pressure * (1 - composureResistance) * 0.23;
+  const familiarityPenalty = (100 - familiarity) * (0.045 + (100 - player.attributes.decisions) / 3_000);
   const foot = context.foot ?? resolveFootUse(player);
   const footAdjustment = usesFoot ? (foot.proficiency - 70) * 0.16 : 0;
-  return rawScore * conditionFactor(player) - fatiguePenalty - pressurePenalty + footAdjustment;
+  return rawScore * conditionFactor(player) - fatiguePenalty - pressurePenalty - familiarityPenalty + footAdjustment;
 }
 
-function oppositionScore(player: MatchPlayer, rawScore: number, fatigue = 0) {
+function oppositionScore(player: MatchPlayer, rawScore: number, fatigue = 0, familiarity = 100) {
   const fatiguePenalty = clamp(fatigue, 0, 100) * (1.06 - player.attributes.stamina / 190) * 0.15;
-  return rawScore * conditionFactor(player) - fatiguePenalty;
+  const familiarityPenalty = (100 - clamp(familiarity, 0, 100)) * 0.045;
+  return rawScore * conditionFactor(player) - fatiguePenalty - familiarityPenalty;
 }
 
 const PASS_PHASE_MODIFIER: Record<PossessionPhase, number> = {
@@ -76,6 +81,9 @@ export function calculatePassProbability(input: {
   defenderFatigue?: number;
   pressure?: number;
   foot?: FootUse;
+  passerFamiliarity?: number;
+  receiverFamiliarity?: number;
+  defenderFamiliarity?: number;
 }): ProbabilityBreakdown {
   const { passer, receiver, defender, phase, tactics, homeAdvantage } = input;
   const rawAttack = (
@@ -91,6 +99,7 @@ export function calculatePassProbability(input: {
     fatigue: input.passerFatigue,
     pressure: input.pressure,
     foot: input.foot,
+    familiarity: input.passerFamiliarity,
   });
   const defense = oppositionScore(defender, (
     defender.attributes.positioning * 0.29
@@ -99,10 +108,14 @@ export function calculatePassProbability(input: {
     + defender.attributes.concentration * 0.13
     + defender.attributes.acceleration * 0.08
     + defender.attributes.tackling * 0.07
-  ), input.defenderFatigue);
+  ), input.defenderFatigue, input.defenderFamiliarity);
+  const passingStyle = tactics.passingStyle === "short" ? 0.024 : tactics.passingStyle === "direct" ? -0.025 : 0;
+  const receiverFamiliarity = (clamp(input.receiverFamiliarity ?? 100, 0, 100) - 100) / 2_800;
   const context = PASS_PHASE_MODIFIER[phase]
     - (tactics.risk - 50) / 650
     - (tactics.tempo - 50) / 900
+    + passingStyle
+    + receiverFamiliarity
     + mentalityModifier(tactics)
     + homeAdvantage / 500;
   const probability = clamp(0.74 + (attack - defense) / 190 + context, 0.16, 0.95);
@@ -117,6 +130,8 @@ export function calculateDribbleProbability(input: {
   defenderFatigue?: number;
   pressure?: number;
   foot?: FootUse;
+  dribblerFamiliarity?: number;
+  defenderFamiliarity?: number;
 }): ProbabilityBreakdown {
   const { dribbler, defender, homeAdvantage } = input;
   const attack = executionScore(dribbler, (
@@ -131,6 +146,7 @@ export function calculateDribbleProbability(input: {
     fatigue: input.dribblerFatigue,
     pressure: input.pressure,
     foot: input.foot,
+    familiarity: input.dribblerFamiliarity,
   });
   const defense = oppositionScore(defender, (
     defender.attributes.tackling * 0.24
@@ -140,7 +156,7 @@ export function calculateDribbleProbability(input: {
     + defender.attributes.acceleration * 0.1
     + defender.attributes.strength * 0.1
     + defender.attributes.decisions * 0.1
-  ), input.defenderFatigue);
+  ), input.defenderFatigue, input.defenderFamiliarity);
   const context = homeAdvantage / 800;
   const probability = clamp(0.49 + (attack - defense) / 175 + context, 0.1, 0.88);
   return Object.freeze({ probability, attack, defense, context });
@@ -154,6 +170,8 @@ export function calculateCrossProbability(input: {
   markerFatigue?: number;
   pressure?: number;
   foot?: FootUse;
+  crosserFamiliarity?: number;
+  markerFamiliarity?: number;
 }): ProbabilityBreakdown {
   const { crosser, marker, homeAdvantage } = input;
   const attack = executionScore(crosser, (
@@ -167,6 +185,7 @@ export function calculateCrossProbability(input: {
     fatigue: input.crosserFatigue,
     pressure: input.pressure,
     foot: input.foot,
+    familiarity: input.crosserFamiliarity,
   });
   const defense = oppositionScore(marker, (
     marker.attributes.marking * 0.25
@@ -175,7 +194,7 @@ export function calculateCrossProbability(input: {
     + marker.attributes.acceleration * 0.13
     + marker.attributes.agility * 0.12
     + marker.attributes.concentration * 0.1
-  ), input.markerFatigue);
+  ), input.markerFatigue, input.markerFamiliarity);
   const context = homeAdvantage / 900;
   const probability = clamp(0.55 + (attack - defense) / 185 + context, 0.14, 0.88);
   return Object.freeze({ probability, attack, defense, context });
@@ -191,6 +210,8 @@ export function calculateAerialDuelProbability(input: {
   attackerFatigue?: number;
   defenderFatigue?: number;
   pressure?: number;
+  attackerFamiliarity?: number;
+  defenderFamiliarity?: number;
 }): ProbabilityBreakdown {
   const { attacker, defender } = input;
   const attack = executionScore(attacker, (
@@ -204,6 +225,7 @@ export function calculateAerialDuelProbability(input: {
   ), {
     fatigue: input.attackerFatigue,
     pressure: input.pressure,
+    familiarity: input.attackerFamiliarity,
   }, false);
   const defense = oppositionScore(defender, (
     defender.attributes.jumpingReach * 0.27
@@ -213,7 +235,7 @@ export function calculateAerialDuelProbability(input: {
     + defender.attributes.positioning * 0.13
     + defender.attributes.marking * 0.11
     + heightContribution(defender)
-  ), input.defenderFatigue);
+  ), input.defenderFatigue, input.defenderFamiliarity);
   const context = 0;
   const probability = clamp(0.5 + (attack - defense) / 170, 0.09, 0.91);
   return Object.freeze({ probability, attack, defense, context });
@@ -227,6 +249,8 @@ export function calculateGoalkeeperCrossProbability(input: {
   crosserFatigue?: number;
   pressure?: number;
   foot?: FootUse;
+  goalkeeperFamiliarity?: number;
+  crosserFamiliarity?: number;
 }): ProbabilityBreakdown {
   const { goalkeeper, crosser, target } = input;
   const attack = executionScore(goalkeeper, (
@@ -240,6 +264,7 @@ export function calculateGoalkeeperCrossProbability(input: {
   ), {
     fatigue: input.goalkeeperFatigue,
     pressure: input.pressure,
+    familiarity: input.goalkeeperFamiliarity,
   }, false);
   const delivery = executionScore(crosser, (
     crosser.attributes.crossing * 0.38
@@ -251,6 +276,7 @@ export function calculateGoalkeeperCrossProbability(input: {
     fatigue: input.crosserFatigue,
     pressure: input.pressure,
     foot: input.foot,
+    familiarity: input.crosserFamiliarity,
   });
   const defense = delivery;
   const context = 0;
@@ -269,6 +295,8 @@ export function calculateShotOnTargetProbability(input: {
   pressure?: number;
   foot?: FootUse;
   chanceQuality?: number;
+  shooterFamiliarity?: number;
+  markerFamiliarity?: number;
 }): ProbabilityBreakdown {
   const { shooter, marker, tactics, homeAdvantage } = input;
   const shotType = input.shotType ?? "foot";
@@ -289,6 +317,7 @@ export function calculateShotOnTargetProbability(input: {
     fatigue: input.shooterFatigue,
     pressure: input.pressure,
     foot: input.foot,
+    familiarity: input.shooterFamiliarity,
   }, shotType === "foot");
   const defense = oppositionScore(marker, (
     marker.attributes.positioning * 0.27
@@ -298,7 +327,7 @@ export function calculateShotOnTargetProbability(input: {
     + marker.attributes.tackling * 0.11
     + marker.attributes.bravery * 0.07
     + marker.attributes.balance * 0.05
-  ), input.markerFatigue);
+  ), input.markerFatigue, input.markerFamiliarity);
   const context = mentalityModifier(tactics)
     + homeAdvantage / 600
     + (input.chanceQuality ?? 0) / 500;
@@ -316,6 +345,8 @@ export function calculateGoalProbability(input: {
   pressure?: number;
   foot?: FootUse;
   chanceQuality?: number;
+  shooterFamiliarity?: number;
+  goalkeeperFamiliarity?: number;
 }): ProbabilityBreakdown {
   const { shooter, goalkeeper, homeAdvantage } = input;
   const shotType = input.shotType ?? "foot";
@@ -334,6 +365,7 @@ export function calculateGoalProbability(input: {
     fatigue: input.shooterFatigue,
     pressure: input.pressure,
     foot: input.foot,
+    familiarity: input.shooterFamiliarity,
   }, shotType === "foot");
   const goalkeeperRaw = shotType === "header"
     ? goalkeeper.attributes.reflexes * 0.27
@@ -348,7 +380,7 @@ export function calculateGoalProbability(input: {
       + goalkeeper.attributes.positioning * 0.13
       + goalkeeper.attributes.anticipation * 0.11
       + goalkeeper.attributes.composure * 0.08;
-  const defense = oppositionScore(goalkeeper, goalkeeperRaw, input.goalkeeperFatigue);
+  const defense = oppositionScore(goalkeeper, goalkeeperRaw, input.goalkeeperFatigue, input.goalkeeperFamiliarity);
   const context = homeAdvantage / 700 + (input.chanceQuality ?? 0) / 650;
   const probability = clamp(0.29 + (attack - defense) / 175 + context, 0.04, 0.66);
   return Object.freeze({ probability, attack, defense, context });
@@ -356,14 +388,21 @@ export function calculateGoalProbability(input: {
 
 export function calculateTeamControl(team: TeamSnapshot) {
   const outfieldPlayers = team.players.filter((player) => player.position !== "GK");
-  const total = outfieldPlayers.reduce((sum, player) => sum
-    + player.attributes.passing * 0.25
-    + player.attributes.technique * 0.17
-    + player.attributes.decisions * 0.17
-    + player.attributes.vision * 0.12
-    + player.attributes.positioning * 0.09
-    + player.attributes.teamwork * 0.08
-    + player.attributes.stamina * 0.06
-    + player.attributes.firstTouch * 0.06, 0);
-  return total / outfieldPlayers.length;
+  const total = outfieldPlayers.reduce((sum, player) => {
+    const assignment = assignmentFor(team, player.id);
+    const familiarity = effectiveFamiliarity(player, assignment);
+    return sum
+      + player.attributes.passing * 0.25
+      + player.attributes.technique * 0.17
+      + player.attributes.decisions * 0.17
+      + player.attributes.vision * 0.12
+      + player.attributes.positioning * 0.09
+      + player.attributes.teamwork * 0.08
+      + player.attributes.stamina * 0.06
+      + player.attributes.firstTouch * 0.06
+      - (100 - familiarity) * 0.035;
+  }, 0);
+  const style = team.tactics.passingStyle === "short" ? 1.4 : team.tactics.passingStyle === "direct" ? -0.8 : 0;
+  const mentality = team.tactics.mentality === "attacking" ? 0.6 : team.tactics.mentality === "defensive" ? -0.4 : 0;
+  return total / outfieldPlayers.length + style + mentality;
 }

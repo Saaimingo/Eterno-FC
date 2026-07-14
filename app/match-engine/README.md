@@ -1,4 +1,4 @@
-# Motor de partida vNext — MP-0 a MP-2
+# Motor de partida vNext — MP-0 a MP-3
 
 Este diretório contém o novo núcleo causal do Eterno FC. Ele roda em paralelo ao motor legado; ainda não decide as partidas da carreira do usuário.
 
@@ -24,19 +24,25 @@ Este diretório contém o novo núcleo causal do Eterno FC. Ele roda em paralelo
 - posses com passe, interceptação, chute, defesa e gol;
 - drible contra desarme, cruzamento, disputa aérea e intervenção do goleiro;
 - cabeceio técnico separado da capacidade de ganhar a bola no alto;
+- banco de reservas e escalação com posição, função e instruções por atleta;
+- 18 funções, 21 traços de escolha e familiaridade posicional/tática;
+- plano coletivo com mentalidade, risco, ritmo, largura, linhas, pressão, passe, foco, transição e liberdade;
+- substituições, mudanças de função, posição e plano durante a partida;
+- intervenções registradas no ledger que alteram somente acontecimentos futuros;
 - estatísticas reconstruídas para todos os confrontos confirmados;
-- testes de replay, causalidade, isolamento, fadiga, pés e especialistas;
-- calibradores geral e de perfis especialistas.
+- testes de replay, causalidade, isolamento, fadiga, pés, especialistas, tática e substituição;
+- calibradores geral, de perfis especialistas e de decisões do treinador.
 
 ## Limite de integração
 
-O motor só substituirá o legado depois de receber tática/funções no MP-3, regras essenciais nas fases seguintes e um adaptador explícito. Até lá, nenhum save existente ou resultado da interface é alterado.
+O motor só substituirá o legado depois de receber as regras essenciais das fases seguintes e um adaptador explícito. Até lá, nenhum save existente ou resultado da interface é alterado.
 
 ## Calibração
 
 ```bash
 npm run calibrate:match-engine -- 10000
 npm run calibrate:match-engine:specialists -- 1000
+npm run calibrate:match-engine:tactics -- 1000
 ```
 
-Os comandos informam distribuição de resultados, ações, fadiga, repetibilidade e diferenças mensuráveis de especialistas antes da integração visual.
+Os comandos informam distribuição de resultados, ações, fadiga, repetibilidade, diferenças de especialistas e sensibilidade às decisões do treinador antes da integração visual.

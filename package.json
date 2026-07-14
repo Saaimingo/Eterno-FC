@@ -16,6 +16,7 @@
     "typecheck": "bash scripts/sites-env.sh -- tsc --noEmit",
     "calibrate:match-engine": "node --import tsx scripts/calibrate-match-engine.mjs",
     "calibrate:match-engine:specialists": "node --import tsx scripts/calibrate-match-engine-specialists.mjs",
+    "calibrate:match-engine:tactics": "node --import tsx scripts/calibrate-match-engine-tactics.mjs",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {

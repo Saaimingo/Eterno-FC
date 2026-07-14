@@ -28,7 +28,20 @@ import {
   type ShotType,
 } from "./probabilities";
 import { SeededRng } from "./rng";
+import { TeamMatchRuntime } from "./runtime";
 import { projectStatistics } from "./statistics";
+import {
+  aerialTargetModifier,
+  assignmentFor,
+  attackActionModifier,
+  defenderModifier,
+  effectiveFamiliarity,
+  initialCarrierModifier,
+  passTargetModifier,
+  receiverModifier,
+  relevantActionTraits,
+  tacticalAudit,
+} from "./tactics";
 
 const PERIOD_DURATION_MS = 2_700_000;
 const MATCH_DURATION_MS = PERIOD_DURATION_MS * 2;
@@ -74,11 +87,30 @@ function requestedFootFor(player: MatchPlayer, action: "cross" | "shot"): Foot |
   return "either";
 }
 
+function resolvePlayerFootUse(
+  player: MatchPlayer,
+  requested: Foot | "either" = "either",
+  essential = false,
+) {
+  if (!player.traits.includes("avoids_weak_foot") || player.feet.avoidsWeakFoot) {
+    return resolveFootUse(player, requested, essential);
+  }
+  return resolveFootUse({
+    ...player,
+    feet: { ...player.feet, avoidsWeakFoot: true },
+  }, requested, essential);
+}
+
 function attackingHomeAdvantage(team: TeamSnapshot, input: MatchInput) {
   return team.id === input.home.id ? input.context.homeAdvantage : 0;
 }
 
-function receiverWeight(player: MatchPlayer, phase: PossessionPhase) {
+function receiverWeight(
+  team: TeamSnapshot,
+  player: MatchPlayer,
+  carrier: MatchPlayer,
+  phase: PossessionPhase,
+) {
   const positionBonus = phase === "buildup"
     ? ["CB", "LB", "RB", "DM", "CM"].includes(player.position) ? 38 : 4
     : phase === "progression"
@@ -86,35 +118,39 @@ function receiverWeight(player: MatchPlayer, phase: PossessionPhase) {
       : ["AM", "LW", "RW", "ST"].includes(player.position)
         ? 44
         : ["LB", "RB"].includes(player.position) ? 18 : 3;
-  return 8
+  return Math.max(1, 8
     + positionBonus
     + player.attributes.offBall * 0.35
     + player.attributes.firstTouch * 0.2
-    + player.attributes.anticipation * 0.12;
+    + player.attributes.anticipation * 0.12
+    + receiverModifier(team, player, phase)
+    + passTargetModifier(carrier, player, phase));
 }
 
-function defenderWeight(player: MatchPlayer, phase: PossessionPhase) {
+function defenderWeight(team: TeamSnapshot, player: MatchPlayer, phase: PossessionPhase) {
   if (player.position === "GK") return 0;
   const positionBonus = phase === "buildup"
     ? ["ST", "AM", "LW", "RW"].includes(player.position) ? 34 : 8
     : phase === "progression"
       ? ["DM", "CM", "AM", "LB", "RB"].includes(player.position) ? 36 : 10
       : ["DM", "CB", "LB", "RB"].includes(player.position) ? 44 : 5;
-  return 8
+  return Math.max(1, 8
     + positionBonus
     + player.attributes.positioning * 0.28
     + player.attributes.anticipation * 0.2
-    + player.attributes.marking * 0.15;
+    + player.attributes.marking * 0.15
+    + defenderModifier(team, player, phase));
 }
 
 function pickInitialCarrier(team: TeamSnapshot, rng: SeededRng, label: string) {
   const candidates = team.players.filter((player) => player.position !== "GK");
   return rng.weightedPick(
     candidates,
-    (player) => 10
+    (player) => Math.max(1, 10
       + (["CB", "DM", "CM"].includes(player.position) ? 45 : 5)
       + player.attributes.decisions * 0.25
-      + player.attributes.passing * 0.2,
+      + player.attributes.passing * 0.2
+      + initialCarrierModifier(team, player)),
     label,
   ).item;
 }
@@ -127,23 +163,24 @@ function pickReceiver(
   label: string,
 ) {
   const candidates = team.players.filter((player) => player.position !== "GK" && player.id !== carrier.id);
-  return rng.weightedPick(candidates, (player) => receiverWeight(player, phase), label).item;
+  return rng.weightedPick(candidates, (player) => receiverWeight(team, player, carrier, phase), label).item;
 }
 
 function pickDefender(team: TeamSnapshot, phase: PossessionPhase, rng: SeededRng, label: string) {
   const candidates = team.players.filter((player) => player.position !== "GK");
-  return rng.weightedPick(candidates, (player) => defenderWeight(player, phase), label).item;
+  return rng.weightedPick(candidates, (player) => defenderWeight(team, player, phase), label).item;
 }
 
 function pickAerialTarget(team: TeamSnapshot, crosser: MatchPlayer, rng: SeededRng, label: string) {
   const candidates = team.players.filter((player) => player.position !== "GK" && player.id !== crosser.id);
   return rng.weightedPick(candidates, (player) => {
     const positionBonus = player.position === "ST" ? 68 : player.position === "AM" ? 27 : ["RW", "LW"].includes(player.position) ? 18 : 3;
-    return 5
+    return Math.max(1, 5
       + positionBonus
       + player.attributes.offBall * 0.25
       + player.attributes.anticipation * 0.15
-      + player.attributes.jumpingReach * 0.12;
+      + player.attributes.jumpingReach * 0.12
+      + aerialTargetModifier(team, player));
   }, label).item;
 }
 
@@ -151,24 +188,27 @@ function pickAerialDefender(team: TeamSnapshot, rng: SeededRng, label: string) {
   const candidates = team.players.filter((player) => player.position !== "GK");
   return rng.weightedPick(candidates, (player) => {
     const positionBonus = player.position === "CB" ? 64 : player.position === "DM" ? 30 : ["LB", "RB"].includes(player.position) ? 18 : 2;
-    return 5
+    return Math.max(1, 5
       + positionBonus
       + player.attributes.marking * 0.25
       + player.attributes.positioning * 0.2
-      + player.attributes.jumpingReach * 0.14;
+      + player.attributes.jumpingReach * 0.14
+      + defenderModifier(team, player, "creation"));
   }, label).item;
 }
 
-function opponentOf(team: TeamSnapshot, input: MatchInput) {
-  return team.id === input.home.id ? input.away : input.home;
-}
-
-function selectPossessionTeam(input: MatchInput, rng: SeededRng, label: string) {
-  const homeControl = calculateTeamControl(input.home) + input.context.homeAdvantage * 0.8;
-  const awayControl = calculateTeamControl(input.away);
+function selectPossessionTeam(
+  input: MatchInput,
+  home: TeamSnapshot,
+  away: TeamSnapshot,
+  rng: SeededRng,
+  label: string,
+) {
+  const homeControl = calculateTeamControl(home) + input.context.homeAdvantage * 0.8;
+  const awayControl = calculateTeamControl(away);
   return rng.weightedPick(
-    [input.home, input.away],
-    (team) => team.id === input.home.id ? homeControl : awayControl,
+    [home, away],
+    (team) => team.id === home.id ? homeControl : awayControl,
     label,
   ).item;
 }
@@ -179,6 +219,14 @@ function auditComponents(breakdown: ProbabilityBreakdown) {
     defense: Number(breakdown.defense.toFixed(4)),
     context: Number(breakdown.context.toFixed(6)),
   });
+}
+
+function familiarityFor(team: TeamSnapshot, player: MatchPlayer) {
+  return effectiveFamiliarity(player, assignmentFor(team, player.id));
+}
+
+function tacticalDetails(team: TeamSnapshot, player: MatchPlayer) {
+  return tacticalAudit(team, player);
 }
 
 function pressureFor(input: {
@@ -207,14 +255,17 @@ function pickAttackAction(carrier: MatchPlayer, team: TeamSnapshot, rng: SeededR
     (action) => {
       if (action === "cross") {
         const positionBonus = ["RW", "LW"].includes(carrier.position) ? 52 : ["RB", "LB"].includes(carrier.position) ? 38 : 5;
-        return 6 + positionBonus + carrier.attributes.decisions * 0.08 + team.tactics.risk * 0.04;
+        return Math.max(1, 6 + positionBonus + carrier.attributes.decisions * 0.08
+          + team.tactics.risk * 0.04 + attackActionModifier(team, carrier, action));
       }
       if (action === "dribble") {
         const positionBonus = ["RW", "LW", "AM"].includes(carrier.position) ? 34 : carrier.position === "ST" ? 13 : 5;
-        return 7 + positionBonus + carrier.attributes.flair * 0.1 + carrier.attributes.decisions * 0.06;
+        return Math.max(1, 7 + positionBonus + carrier.attributes.flair * 0.1
+          + carrier.attributes.decisions * 0.06 + attackActionModifier(team, carrier, action));
       }
       const positionBonus = carrier.position === "ST" ? 58 : carrier.position === "AM" ? 34 : ["RW", "LW"].includes(carrier.position) ? 22 : 9;
-      return 8 + positionBonus + carrier.attributes.decisions * 0.1 + team.tactics.risk * 0.05;
+      return Math.max(1, 8 + positionBonus + carrier.attributes.decisions * 0.1
+        + team.tactics.risk * 0.05 + attackActionModifier(team, carrier, action));
     },
     label,
   ).item;
@@ -231,7 +282,7 @@ function resolveShot(
   let clockMs = input.clockMs + 500;
   const pressure = pressureFor({ matchInput, ledger, period, clockMs, phase: "danger", team });
   const foot = shotType === "foot"
-    ? resolveFootUse(carrier, requestedFootFor(carrier, "shot"), true)
+    ? resolvePlayerFootUse(carrier, requestedFootFor(carrier, "shot"), true)
     : undefined;
   const shooterFatigue = fatigue.value(carrier);
   const markerFatigue = fatigue.value(marker);
@@ -249,6 +300,8 @@ function resolveShot(
     pressure,
     foot,
     chanceQuality,
+    shooterFamiliarity: familiarityFor(team, carrier),
+    markerFamiliarity: familiarityFor(opponent, marker),
   });
   const onTarget = rng.chance(shotBreakdown.probability, `p${period}.${possessionIndex}.${shotType}.on_target`);
   fatigue.exert(carrier, shotType === "header" ? 0.85 : 0.7);
@@ -268,6 +321,8 @@ function resolveShot(
     tags: [
       "dangerous_attack",
       shotType,
+      `role:${assignmentFor(team, carrier.id).role}`,
+      ...relevantActionTraits(carrier, "shot").map((trait) => `trait:${trait}`),
       ...(foot ? footTags(foot) : []),
     ],
     causes: [input.causeEventId],
@@ -281,6 +336,7 @@ function resolveShot(
         fatigue: Number(shooterFatigue.toFixed(2)),
         pressure,
         chanceQuality,
+        ...tacticalDetails(team, carrier),
         ...(foot ? { usedFoot: foot.foot, footProficiency: foot.proficiency } : {}),
       },
     },
@@ -298,6 +354,8 @@ function resolveShot(
     pressure,
     foot,
     chanceQuality,
+    shooterFamiliarity: familiarityFor(team, carrier),
+    goalkeeperFamiliarity: familiarityFor(opponent, goalkeeper),
   });
   const goalChance = rng.chance(goalBreakdown.probability, `p${period}.${possessionIndex}.${shotType}.goal`);
   fatigue.exert(goalkeeper, 0.55);
@@ -325,6 +383,7 @@ function resolveShot(
           fatigue: Number(shooterFatigue.toFixed(2)),
           goalkeeperFatigue: Number(goalkeeperFatigue.toFixed(2)),
           pressure,
+          ...tacticalDetails(team, carrier),
           ...(foot ? { usedFoot: foot.foot, footProficiency: foot.proficiency } : {}),
         },
       },
@@ -362,6 +421,7 @@ function resolveShot(
         style: saveStyle,
         fatigue: Number(goalkeeperFatigue.toFixed(2)),
         pressure,
+        ...tacticalDetails(opponent, goalkeeper),
       },
     },
   });
@@ -372,7 +432,7 @@ function resolveDribble(input: ResolutionContext) {
   const { matchInput, ledger, rng, fatigue, team, opponent, period, possessionIndex, carrier, marker } = input;
   let clockMs = input.clockMs + 350;
   const pressure = pressureFor({ matchInput, ledger, period, clockMs, phase: "danger", team });
-  const foot = resolveFootUse(carrier);
+  const foot = resolvePlayerFootUse(carrier);
   const dribblerFatigue = fatigue.value(carrier);
   const defenderFatigue = fatigue.value(marker);
   const breakdown = calculateDribbleProbability({
@@ -383,6 +443,8 @@ function resolveDribble(input: ResolutionContext) {
     defenderFatigue,
     pressure,
     foot,
+    dribblerFamiliarity: familiarityFor(team, carrier),
+    defenderFamiliarity: familiarityFor(opponent, marker),
   });
   const chance = rng.chance(breakdown.probability, `p${period}.${possessionIndex}.dribble`);
   const attempt = ledger.append({
@@ -397,7 +459,12 @@ function resolveDribble(input: ResolutionContext) {
     origin: pointFor(carrier, "creation"),
     destination: pointFor(carrier, "danger"),
     outcome: "contested",
-    tags: ["one_v_one", ...footTags(foot)],
+    tags: [
+      "one_v_one",
+      `role:${assignmentFor(team, carrier.id).role}`,
+      ...relevantActionTraits(carrier, "dribble").map((trait) => `trait:${trait}`),
+      ...footTags(foot),
+    ],
     causes: [input.causeEventId],
     rngTraceId: chance.traceId,
     audit: {
@@ -410,6 +477,7 @@ function resolveDribble(input: ResolutionContext) {
         pressure,
         usedFoot: foot.foot,
         footProficiency: foot.proficiency,
+        ...tacticalDetails(team, carrier),
       },
     },
   });
@@ -438,6 +506,7 @@ function resolveDribble(input: ResolutionContext) {
         action: "tackle",
         fatigue: Number(defenderFatigue.toFixed(2)),
         pressure,
+        ...tacticalDetails(opponent, marker),
       },
     },
   });
@@ -470,7 +539,7 @@ function resolveCross(input: ResolutionContext) {
   const goalkeeper = opponent.players.find((player) => player.position === "GK");
   if (!goalkeeper) throw new Error(`${opponent.name} está sem goleiro.`);
   const pressure = pressureFor({ matchInput, ledger, period, clockMs, phase: "danger", team });
-  const foot = resolveFootUse(carrier, requestedFootFor(carrier, "cross"), true);
+  const foot = resolvePlayerFootUse(carrier, requestedFootFor(carrier, "cross"), true);
   const crosserFatigue = fatigue.value(carrier);
   const markerFatigue = fatigue.value(input.marker);
   const crossBreakdown = calculateCrossProbability({
@@ -481,6 +550,8 @@ function resolveCross(input: ResolutionContext) {
     markerFatigue,
     pressure,
     foot,
+    crosserFamiliarity: familiarityFor(team, carrier),
+    markerFamiliarity: familiarityFor(opponent, input.marker),
   });
   const crossChance = rng.chance(crossBreakdown.probability, `p${period}.${possessionIndex}.cross.delivery`);
   const attempt = ledger.append({
@@ -495,7 +566,12 @@ function resolveCross(input: ResolutionContext) {
     origin: pointFor(carrier, "creation"),
     destination: pointFor(target, "danger"),
     outcome: "attempted",
-    tags: ["wide_attack", ...footTags(foot)],
+    tags: [
+      "wide_attack",
+      `role:${assignmentFor(team, carrier.id).role}`,
+      ...relevantActionTraits(carrier, "cross").map((trait) => `trait:${trait}`),
+      ...footTags(foot),
+    ],
     causes: [input.causeEventId],
     rngTraceId: crossChance.traceId,
     audit: {
@@ -508,6 +584,7 @@ function resolveCross(input: ResolutionContext) {
         pressure,
         usedFoot: foot.foot,
         footProficiency: foot.proficiency,
+        ...tacticalDetails(team, carrier),
       },
     },
   });
@@ -558,6 +635,8 @@ function resolveCross(input: ResolutionContext) {
     crosserFatigue,
     pressure,
     foot,
+    goalkeeperFamiliarity: familiarityFor(opponent, goalkeeper),
+    crosserFamiliarity: familiarityFor(team, carrier),
   });
   const goalkeeperChance = rng.chance(goalkeeperBreakdown.probability, `p${period}.${possessionIndex}.cross.goalkeeper`);
   if (goalkeeperChance.success) {
@@ -591,6 +670,7 @@ function resolveCross(input: ResolutionContext) {
           action,
           fatigue: Number(goalkeeperFatigue.toFixed(2)),
           pressure,
+          ...tacticalDetails(opponent, goalkeeper),
         },
       },
     });
@@ -605,6 +685,8 @@ function resolveCross(input: ResolutionContext) {
     attackerFatigue,
     defenderFatigue,
     pressure,
+    attackerFamiliarity: familiarityFor(team, target),
+    defenderFamiliarity: familiarityFor(opponent, defender),
   });
   const aerialChance = rng.chance(aerialBreakdown.probability, `p${period}.${possessionIndex}.cross.aerial`);
   fatigue.exert(target, 0.95);
@@ -635,6 +717,10 @@ function resolveCross(input: ResolutionContext) {
         attackerFatigue: Number(attackerFatigue.toFixed(2)),
         defenderFatigue: Number(defenderFatigue.toFixed(2)),
         pressure,
+        attackerRole: assignmentFor(team, target.id).role,
+        defenderRole: assignmentFor(opponent, defender.id).role,
+        attackerFamiliarity: familiarityFor(team, target),
+        defenderFamiliarity: familiarityFor(opponent, defender),
       },
     },
   });
@@ -655,15 +741,21 @@ function simulatePossession(input: {
   rng: SeededRng;
   fatigue: FatigueTracker;
   team: TeamSnapshot;
+  opponent: TeamSnapshot;
   period: MatchPeriod;
   clockMs: number;
   causeEventId: string;
   possessionIndex: number;
 }) {
-  const { matchInput, ledger, rng, fatigue, team, period, possessionIndex } = input;
-  const opponent = opponentOf(team, matchInput);
-  fatigue.exertMany(team.players, 0.15 + team.tactics.tempo / 1_000);
-  fatigue.exertMany(opponent.players, 0.13 + opponent.tactics.tempo / 1_200);
+  const { matchInput, ledger, rng, fatigue, team, opponent, period, possessionIndex } = input;
+  const transitionLoad = team.tactics.transitionStyle === "counter" ? 0.035 : team.tactics.transitionStyle === "hold" ? -0.015 : 0;
+  fatigue.exertMany(team.players, 0.12 + team.tactics.tempo / 1_100 + transitionLoad);
+  fatigue.exertMany(opponent.players, 0.09 + opponent.tactics.pressingIntensity / 950);
+  for (const player of opponent.players) {
+    const assignment = assignmentFor(opponent, player.id);
+    fatigue.exert(player, assignment.instructions.pressing / 5_000
+      + (player.traits.includes("presses_aggressively") ? 0.018 : 0));
+  }
   let clockMs = input.clockMs;
   let carrier = pickInitialCarrier(team, rng, `p${period}.${possessionIndex}.carrier`);
   const possession = ledger.append({
@@ -685,7 +777,7 @@ function simulatePossession(input: {
     const receiver = pickReceiver(team, carrier, phase, rng, `p${period}.${possessionIndex}.${phase}.receiver`);
     const defender = pickDefender(opponent, phase, rng, `p${period}.${possessionIndex}.${phase}.defender`);
     const pressure = pressureFor({ matchInput, ledger, period, clockMs, phase, team });
-    const foot = resolveFootUse(carrier);
+    const foot = resolvePlayerFootUse(carrier);
     const passerFatigue = fatigue.value(carrier);
     const defenderFatigue = fatigue.value(defender);
     const breakdown = calculatePassProbability({
@@ -699,6 +791,9 @@ function simulatePossession(input: {
       defenderFatigue,
       pressure,
       foot,
+      passerFamiliarity: familiarityFor(team, carrier),
+      receiverFamiliarity: familiarityFor(team, receiver),
+      defenderFamiliarity: familiarityFor(opponent, defender),
     });
     const chance = rng.chance(breakdown.probability, `p${period}.${possessionIndex}.${phase}.pass`);
     const attempt = ledger.append({
@@ -726,6 +821,9 @@ function simulatePossession(input: {
           pressure,
           usedFoot: foot.foot,
           footProficiency: foot.proficiency,
+          ...tacticalDetails(team, carrier),
+          receiverRole: assignmentFor(team, receiver.id).role,
+          receiverFamiliarity: familiarityFor(team, receiver),
         },
       },
     });
@@ -815,10 +913,11 @@ function buildResult(
   ledger: EventLedger,
   rng: SeededRng,
   fatigue: FatigueTracker,
+  homeRuntime: TeamMatchRuntime,
+  awayRuntime: TeamMatchRuntime,
 ): MatchResult {
   ledger.assertComplete();
   const events = ledger.events();
-  const players = [...input.home.players, ...input.away.players];
   const finalState: MatchState = Object.freeze({
     engineVersion: MATCH_ENGINE_VERSION,
     status: "finished",
@@ -826,7 +925,10 @@ function buildResult(
     clockMs: MATCH_DURATION_MS,
     score: ledger.score(),
     possessionTeamId: null,
-    players: fatigue.states(players),
+    players: Object.freeze([
+      ...homeRuntime.states(fatigue),
+      ...awayRuntime.states(fatigue),
+    ]),
   });
   return Object.freeze({
     engineVersion: MATCH_ENGINE_VERSION,
@@ -842,7 +944,9 @@ export function simulateEmptyMatch(input: MatchInput): MatchResult {
   validateMatchInput(input);
   const ledger = new EventLedger(input.context.matchId, input.home.id, input.away.id);
   const rng = new SeededRng(input.context.seed);
-  const fatigue = new FatigueTracker([...input.home.players, ...input.away.players]);
+  const homeRuntime = new TeamMatchRuntime(input.home);
+  const awayRuntime = new TeamMatchRuntime(input.away);
+  const fatigue = new FatigueTracker([...homeRuntime.allPlayers(), ...awayRuntime.allPlayers()]);
   const firstKickoff = ledger.append({
     clockMs: 0,
     period: 1,
@@ -884,38 +988,132 @@ export function simulateEmptyMatch(input: MatchInput): MatchResult {
     outcome: "finished",
     causes: [secondEnd.eventId],
   });
-  return buildResult(input, ledger, rng, fatigue);
+  return buildResult(input, ledger, rng, fatigue, homeRuntime, awayRuntime);
+}
+
+function interventionPeriod(clockMs: number): MatchPeriod {
+  return clockMs < PERIOD_DURATION_MS ? 1 : 2;
+}
+
+function applyIntervention(input: {
+  intervention: MatchInput["interventions"][number];
+  ledger: EventLedger;
+  runtime: TeamMatchRuntime;
+  previousEvent: CanonicalMatchEvent;
+}) {
+  const { intervention, ledger, runtime, previousEvent } = input;
+  const clockMs = Math.max(intervention.clockMs, previousEvent.clockMs);
+  if (intervention.type === "substitution") {
+    const outgoingAssignment = runtime.assignment(intervention.playerOutId);
+    runtime.applySubstitution({ ...intervention, clockMs });
+    return ledger.append({
+      clockMs,
+      period: interventionPeriod(clockMs),
+      type: "substitution",
+      teamId: intervention.teamId,
+      actorId: intervention.playerOutId,
+      targetId: intervention.playerInId,
+      outcome: "completed",
+      tags: ["coach_intervention", `role:${intervention.assignment.role}`],
+      causes: [previousEvent.eventId],
+      audit: {
+        details: {
+          interventionId: intervention.id,
+          scheduledClockMs: intervention.clockMs,
+          playerOutRole: outgoingAssignment.role,
+          playerInRole: intervention.assignment.role,
+          playerInPosition: intervention.assignment.position,
+          familiarity: intervention.assignment.tacticalFamiliarity,
+        },
+      },
+    });
+  }
+
+  runtime.applyTacticalChange(intervention);
+  return ledger.append({
+    clockMs,
+    period: interventionPeriod(clockMs),
+    type: "tactical_change",
+    teamId: intervention.teamId,
+    outcome: "applied",
+    tags: ["coach_intervention", "future_only"],
+    causes: [previousEvent.eventId],
+    audit: {
+      details: {
+        interventionId: intervention.id,
+        scheduledClockMs: intervention.clockMs,
+        changes: JSON.stringify(intervention.changes),
+        assignmentChanges: JSON.stringify(intervention.assignmentChanges.map((assignment) => ({
+          playerId: assignment.playerId,
+          position: assignment.position,
+          role: assignment.role,
+        }))),
+      },
+    },
+  });
 }
 
 export function simulateMatch(input: MatchInput): MatchResult {
   validateMatchInput(input);
   const ledger = new EventLedger(input.context.matchId, input.home.id, input.away.id);
   const rng = new SeededRng(input.context.seed);
-  const fatigue = new FatigueTracker([...input.home.players, ...input.away.players]);
+  const homeRuntime = new TeamMatchRuntime(input.home);
+  const awayRuntime = new TeamMatchRuntime(input.away);
+  const runtimes = new Map([
+    [homeRuntime.id, homeRuntime],
+    [awayRuntime.id, awayRuntime],
+  ]);
+  const fatigue = new FatigueTracker([...homeRuntime.allPlayers(), ...awayRuntime.allPlayers()]);
+  const interventions = [...input.interventions].map((intervention, index) => ({ intervention, index }))
+    .sort((left, right) => left.intervention.clockMs - right.intervention.clockMs || left.index - right.index);
+  let nextIntervention = 0;
   let previousEvent: CanonicalMatchEvent | undefined;
+
+  function applyDueInterventions(
+    limitClockMs: number,
+    includeLimit: boolean,
+    cause: CanonicalMatchEvent,
+  ) {
+    let latest = cause;
+    while (nextIntervention < interventions.length) {
+      const scheduled = interventions[nextIntervention].intervention;
+      const due = includeLimit ? scheduled.clockMs <= limitClockMs : scheduled.clockMs < limitClockMs;
+      if (!due) break;
+      const runtime = runtimes.get(scheduled.teamId);
+      if (!runtime) throw new Error(`Equipe desconhecida na intervenção ${scheduled.id}.`);
+      latest = applyIntervention({ intervention: scheduled, ledger, runtime, previousEvent: latest });
+      nextIntervention += 1;
+    }
+    return latest;
+  }
 
   for (const period of [1, 2] as const) {
     const periodStart = (period - 1) * PERIOD_DURATION_MS;
-    const kickoffTeam = period === 1 ? input.home : input.away;
+    const kickoffTeamId = period === 1 ? input.home.id : input.away.id;
     const kickoff = ledger.append({
       clockMs: periodStart,
       period,
       type: "kickoff",
-      teamId: kickoffTeam.id,
+      teamId: kickoffTeamId,
       phase: "restart",
       outcome: "started",
       causes: previousEvent ? [previousEvent.eventId] : [],
     });
     previousEvent = kickoff;
-    let forcedPossessionTeam: TeamSnapshot | null = kickoffTeam;
+    let forcedPossessionTeamId: string | null = kickoffTeamId;
+    let restartAfterGoal = false;
 
     for (let index = 0; index < input.context.possessionsPerPeriod; index += 1) {
       const possessionClock = periodStart + Math.floor((index + 0.5) * PERIOD_DURATION_MS / input.context.possessionsPerPeriod);
-      let possessionTeam = forcedPossessionTeam
-        ?? selectPossessionTeam(input, rng, `p${period}.${index}.possession_team`);
+      previousEvent = applyDueInterventions(possessionClock, true, previousEvent);
+      const currentHome = homeRuntime.snapshot();
+      const currentAway = awayRuntime.snapshot();
+      const possessionTeam = forcedPossessionTeamId
+        ? forcedPossessionTeamId === currentHome.id ? currentHome : currentAway
+        : selectPossessionTeam(input, currentHome, currentAway, rng, `p${period}.${index}.possession_team`);
+      const opponent = possessionTeam.id === currentHome.id ? currentAway : currentHome;
 
-      if (previousEvent.type === "goal") {
-        possessionTeam = previousEvent.teamId === input.home.id ? input.away : input.home;
+      if (restartAfterGoal) {
         previousEvent = ledger.append({
           clockMs: possessionClock,
           period,
@@ -926,6 +1124,7 @@ export function simulateMatch(input: MatchInput): MatchResult {
           tags: ["restart_after_goal"],
           causes: [previousEvent.eventId],
         });
+        restartAfterGoal = false;
       }
 
       const result = simulatePossession({
@@ -934,6 +1133,7 @@ export function simulateMatch(input: MatchInput): MatchResult {
         rng,
         fatigue,
         team: possessionTeam,
+        opponent,
         period,
         clockMs: previousEvent.type === "kickoff" && previousEvent.clockMs === possessionClock
           ? possessionClock + 450
@@ -942,11 +1142,13 @@ export function simulateMatch(input: MatchInput): MatchResult {
         possessionIndex: index,
       });
       previousEvent = result.terminalEvent;
-      forcedPossessionTeam = result.goalTeamId
-        ? result.goalTeamId === input.home.id ? input.away : input.home
+      forcedPossessionTeamId = result.goalTeamId
+        ? result.goalTeamId === input.home.id ? input.away.id : input.home.id
         : null;
+      restartAfterGoal = Boolean(result.goalTeamId);
     }
 
+    previousEvent = applyDueInterventions(periodStart + PERIOD_DURATION_MS, false, previousEvent);
     previousEvent = ledger.append({
       clockMs: periodStart + PERIOD_DURATION_MS,
       period,
@@ -966,5 +1168,5 @@ export function simulateMatch(input: MatchInput): MatchResult {
     outcome: "finished",
     causes: [previousEvent.eventId],
   });
-  return buildResult(input, ledger, rng, fatigue);
+  return buildResult(input, ledger, rng, fatigue, homeRuntime, awayRuntime);
 }

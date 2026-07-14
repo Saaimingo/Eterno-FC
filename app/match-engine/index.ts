@@ -5,5 +5,7 @@ export * from "./physiology";
 export * from "./probabilities";
 export * from "./prototype";
 export * from "./rng";
+export * from "./runtime";
 export * from "./simulate";
 export * from "./statistics";
+export * from "./tactics";
