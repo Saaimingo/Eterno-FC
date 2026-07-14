@@ -93,6 +93,8 @@ export type Competition = {
   nextRoundDate: string;
   championId?: string;
   promotedClubIds?: string[];
+  formatId?: "brazil-cup-2026";
+  entryWaves?: Record<string,string[]>;
   complete: boolean;
   divisionId?: string;
   stateCode?: string;
