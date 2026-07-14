@@ -153,8 +153,9 @@ function refreshUserStandings(game:GameState,fixtures=game.fixtures,clubs=game.c
   return calculateStandings(clubs.filter((club)=>club.divisionId===divisionId),fixtures.filter((fixture)=>fixture.competitionId===divisionId));
 }
 
-export function createNewGame(managerName="Adilson Simon",userClubId="florianopolis",careerName="Minha jornada"):GameState {
-  const clubs=makeClubs(); const chosen=clubs.find((club)=>club.id===userClubId)??clubs.find((club)=>club.id==="florianopolis")!;
+export function createNewGame(managerName="Adilson Simon",userClubId?:string,careerName="Minha jornada"):GameState {
+  const clubs=makeClubs();
+  const chosen=clubs.find((club)=>club.id===userClubId)??randomStartingClub(clubs,managerName,careerName);
   const players=clubs.flatMap((club,index)=>makeSquad(club,index,2026)); players.push(...makeAcademy(chosen,2026)); const world=buildSeason(clubs,2026);
   const game:GameState={version:2,id:`career-${chosen.id}-${Date.now()}`,careerName,managerName,userClubId:chosen.id,managerStatus:"employed",managerReputation:48,managerPoints:0,managerRecord:[{clubId:chosen.id,fromSeason:2026,matches:0,wins:0,trophies:0}],season:2026,date:`2026-01-10`,round:1,clubs,leagues:LEAGUE_SEEDS.map((league)=>({...league})),competitions:world.competitions,players,fixtures:world.fixtures,standings:[],news:[],history:[],transferEvents:[],marketOffers:[],incomingBids:[],vacancies:[],jobOffers:[],formation:"4-3-3",mentality:"Equilibrada",intensity:"Normal",balance:chosen.balance,transferBudget:chosen.transferBudget,weeklyIncome:Math.round(chosen.reputation**2*165),weeklyExpenses:Math.round(chosen.reputation**2*128),boardConfidence:68,academyLevel:Math.max(1,Math.round(chosen.academy/20)),reputation:chosen.reputation,lastFive:[],matchesManaged:0,lastSavedAt:new Date().toISOString()};
   game.standings=refreshUserStandings(game); game.date=nextUserFixture(game)?.date??game.date;
@@ -304,4 +305,9 @@ export function resignJob(game:GameState):GameState{if(game.managerStatus==="une
 
 export function formatMoney(value:number){if(Math.abs(value)>=1_000_000)return`R$ ${(value/1_000_000).toLocaleString("pt-BR",{maximumFractionDigits:1})} mi`;if(Math.abs(value)>=1_000)return`R$ ${(value/1_000).toLocaleString("pt-BR",{maximumFractionDigits:0})} mil`;return`R$ ${value.toLocaleString("pt-BR")}`;}
 export function formatGameDate(value:string,long=false){const date=new Date(`${value}T12:00:00Z`);return new Intl.DateTimeFormat("pt-BR",long?{weekday:"long",day:"2-digit",month:"long",year:"numeric",timeZone:"UTC"}:{weekday:"short",day:"2-digit",month:"short",timeZone:"UTC"}).format(date).replace(".","");}
+function randomStartingClub(clubs: Club[], managerName: string, careerName: string) {
+  const random=seededRandom(`first-club-${managerName}-${careerName}-${Date.now()}`);
+  return clubs[Math.floor(random()*clubs.length)]??clubs[0]!;
+}
+
 export function getAvailableClubs(){return makeClubs();}
