@@ -13,6 +13,7 @@ assert.equal(career.competitions.find((competition)=>competition.id==="COPA-BR")
 assert.equal(career.competitions.find((competition)=>competition.id==="SUPER-BR")?.participantIds.length,2);
 assert.equal(career.fixtures.filter((fixture)=>fixture.competitionId==="SUPER-BR").length,1);
 assert.equal(career.fixtures.filter((fixture)=>fixture.competitionId==="CHAMPIONS").length,8);
+assert.equal(career.competitions.filter((competition)=>competition.type==="state").length,27);
 
 const regionalExpectations={
   "REGIONAL-NE":{participants:20,groups:4,groupFixtures:50},
