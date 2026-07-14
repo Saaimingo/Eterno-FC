@@ -25,5 +25,7 @@ export const SEASON_2026 = {
 } as const;
 
 export function dateForSeason(season: number, date: string) {
-  return `${season}${date.slice(4)}`;
+  if(/^\d{2}-\d{2}$/.test(date))return`${season}-${date}`;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(date))return`${season}${date.slice(4)}`;
+  throw new Error(`Data de calendário inválida: ${date}`);
 }
