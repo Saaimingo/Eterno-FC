@@ -9,6 +9,9 @@ let career=game.createNewGame("Adilson Simon","vitoria","Teste de longo prazo");
 assert.equal(career.competitions.find((competition)=>competition.id==="BRA-B")?.participantIds.length,20);
 assert.equal(career.competitions.find((competition)=>competition.id==="BRA-D")?.participantIds.length,96);
 assert.equal(career.competitions.find((competition)=>competition.id==="COPA-BR")?.participantIds.length,126);
+assert.equal(career.competitions.find((competition)=>competition.id==="SUPER-BR")?.participantIds.length,2);
+assert.equal(career.fixtures.filter((fixture)=>fixture.competitionId==="SUPER-BR").length,1);
+assert.equal(career.fixtures.filter((fixture)=>fixture.competitionId==="CHAMPIONS").length,8);
 
 const regionalExpectations={
   "REGIONAL-NE":{participants:20,groups:4,groupFixtures:50},
@@ -30,6 +33,9 @@ for(let index=0;index<4;index+=1){
   assert.equal(career.clubs.filter((club)=>club.divisionId==="BRA-D").length,96);
   assert.equal(career.clubs.filter((club)=>previous.get(club.id)==="BRA-B"&&club.divisionId==="BRA-A").length,4);
   assert.equal(career.clubs.filter((club)=>previous.get(club.id)==="BRA-D"&&club.divisionId==="BRA-C").length,6);
+  const superCup=career.competitions.find((competition)=>competition.id==="SUPER-BR");
+  assert.equal(superCup?.participantIds.length,2);
+  assert.equal(new Set(superCup?.participantIds).size,2);
 }
 
 assert.equal(career.season,2030);
