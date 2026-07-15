@@ -772,7 +772,7 @@ test("makes a flank intervention measurable without turning it into a guaranteed
 
 test("validates the competition rules and referee profile introduced in MP-4", () => {
   const input = createPrototypeMatchInput("mp4-rules-contract");
-  assert.equal(MATCH_ENGINE_VERSION, "0.7.0-mp7");
+  assert.equal(MATCH_ENGINE_VERSION, "0.8.0-mp8");
   assert.equal(input.context.rules.maxSubstitutions, 5);
   assert.equal(input.context.rules.secondYellowDismissal, true);
   assert.equal(input.context.rules.offsideEnabled, true);
