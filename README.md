@@ -15,7 +15,7 @@ O trabalho em curso está transformando o protótipo em uma base modular, com re
 ```text
 app/
   domain/     tipos e regras fundamentais do domínio
-  match-engine/ novo núcleo causal e determinístico (MP-0/MP-2)
+  match-engine/ núcleo causal e determinístico oficial (MP-0/MP-7)
   rules/      calendários e regulamentos por temporada
   game.ts     fachada temporária do motor em processo de divisão
   page.tsx    interface web do jogo
@@ -32,6 +32,7 @@ tests/        validações automatizadas
 - [Matriz UEFA](docs/uefa-matriz-regulamentos-2026-27.md)
 - [Relatório e calibração do motor MP-0/MP-1](docs/match-engine-mp1-calibration.md)
 - [Relatório e calibração dos confrontos MP-2](docs/match-engine-mp2-calibration.md)
+- [MP-7: prorrogação e disputa por pênaltis](docs/match-engine-mp7-knockout.md)
 
 As demais matrizes de países estão em `docs/`.
 
