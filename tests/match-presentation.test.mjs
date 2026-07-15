@@ -35,6 +35,9 @@ test("projects every canonical goal into score, narration and a pitch destinatio
   assert.ok(goals.every((event) => event.id && event.minuteLabel && event.destination));
   assert.ok(goals.every((event) => event.text.startsWith("GOOOL DO")));
   assert.deepEqual(goals.at(-1)?.scoreAfter, result.finalState.score);
+  const restarts = plan.events.filter((event) => event.detail === "kickoff");
+  assert.equal(restarts.filter((event) => event.text === "Começa o segundo tempo.").length, 1);
+  if (goals.length > 0) assert.ok(restarts.some((event) => event.text.includes("recoloca a bola")));
 });
 
 test("builds a minute-by-minute causal pitch projection", () => {
@@ -49,16 +52,18 @@ test("builds a minute-by-minute causal pitch projection", () => {
   assert.ok(plan.phases.some((phase) => phase.carrierId));
 });
 
-test("does not promote a drawn candidate when a single-leg knockout requires a winner", () => {
+test("promotes a single-leg knockout with extra time and an auditable shootout", () => {
   const { game, fixture } = context("knockout-gate");
   const knockout = {
     ...fixture,
+    id: "mp7-ui-5",
     competitionId: "test-cup",
     stage: "Final",
     tieId: undefined,
   };
   const cupGame = {
     ...game,
+    fixtures: game.fixtures.map((candidate) => candidate.id === fixture.id ? knockout : candidate),
     competitions: [...game.competitions, {
       id: "test-cup",
       name: "Copa Teste",
@@ -73,19 +78,19 @@ test("does not promote a drawn candidate when a single-leg knockout requires a w
       complete: false,
     }],
   };
-  const result = simulateVNextFixture(game, fixture);
-  const drawn = {
-    ...result,
-    finalState: { ...result.finalState, score: [1, 1] },
-    events: result.events.map((event, index) => index === result.events.length - 1
-      ? { ...event, scoreAfter: [1, 1] }
-      : event),
-    statistics: {
-      home: { ...result.statistics.home, goals: 1 },
-      away: { ...result.statistics.away, goals: 1 },
-    },
-  };
-  assert.equal(candidateCanDriveMatch(cupGame, knockout, drawn), false);
+  const result = simulateVNextFixture(cupGame, knockout);
+  assert.equal(result.input.context.rules.drawResolution, "extra_time_and_penalties");
+  assert.equal(result.decision.method, "penalties");
+  assert.ok(result.decision.winnerTeamId);
+  assert.equal(candidateCanDriveMatch(cupGame, knockout, result), true);
+  const plan = projectVNextMatchPlan(cupGame, knockout, result, compareShadowMatch([1, 0], [8, 7], 50, result));
+  assert.equal(plan.durationMinutes, 120);
+  assert.deepEqual(plan.shootoutScore, result.decision.shootoutScore);
+  assert.ok(plan.events.some((event) => event.type === "shootout" && event.text.includes("PÊNALTIS")));
+  const finished = finishRound(cupGame, plan);
+  const played = finished.fixtures.find((candidate) => candidate.id === knockout.id);
+  assert.equal(played?.winnerId, result.decision.winnerTeamId);
+  assert.deepEqual([played?.shootoutHomeGoals, played?.shootoutAwayGoals], result.decision.shootoutScore);
 });
 
 test("promotes the candidate as the official user match and persists the same score", () => {

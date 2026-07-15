@@ -1,4 +1,4 @@
-export const MATCH_ENGINE_VERSION = "0.4.0-mp4";
+export const MATCH_ENGINE_VERSION = "0.7.0-mp7";
 
 export const TECHNICAL_ATTRIBUTE_KEYS = [
   "corners",
@@ -237,6 +237,7 @@ export type MatchRules = Readonly<{
   secondYellowDismissal: boolean;
   offsideEnabled: boolean;
   stoppageTimeEnabled: boolean;
+  drawResolution: "allow_draw" | "extra_time_and_penalties";
 }>;
 
 export type RefereeProfile = Readonly<{
@@ -264,7 +265,7 @@ export type MatchInput = Readonly<{
   interventions: readonly MatchIntervention[];
 }>;
 
-export type MatchPeriod = 1 | 2;
+export type MatchPeriod = 1 | 2 | 3 | 4 | 5;
 
 export type PossessionPhase =
   | "restart"
@@ -305,6 +306,8 @@ export const MATCH_EVENT_TYPES = [
   "tactical_change",
   "stoppage_time",
   "period_end",
+  "shootout_kick",
+  "shootout_end",
   "match_end",
 ] as const;
 
@@ -413,9 +416,18 @@ export type MatchResult = Readonly<{
   engineVersion: string;
   input: MatchInput;
   finalState: MatchState;
+  decision: MatchDecision;
   events: readonly CanonicalMatchEvent[];
   rngTraces: readonly RngTrace[];
   statistics: MatchStatistics;
+}>;
+
+export type MatchDecision = Readonly<{
+  method: "draw" | "regulation" | "extra_time" | "penalties";
+  winnerTeamId: string | null;
+  regulationScore: Score;
+  finalScore: Score;
+  shootoutScore?: Score;
 }>;
 
 function assertRange(value: number, minimum: number, maximum: number, label: string) {
@@ -427,7 +439,8 @@ function assertRange(value: number, minimum: number, maximum: number, label: str
 const PLAYER_TRAIT_SET = new Set<string>(PLAYER_TRAITS);
 const PLAYER_ROLE_SET = new Set<string>(PLAYER_ROLES);
 const MATCH_POSITION_SET = new Set<string>(MATCH_POSITIONS);
-const MATCH_DURATION_MS = 5_400_000;
+const REGULATION_DURATION_MS = 5_400_000;
+const MAX_MATCH_DURATION_MS = 7_200_000;
 
 function validatePlayer(player: MatchPlayer, team: TeamSnapshot, playerIds: Set<string>) {
   if (!player.id || !player.name) throw new Error(`Jogador inválido em ${team.name}.`);
@@ -556,7 +569,10 @@ function validateInterventions(input: MatchInput) {
       throw new Error(`Intervenção sem ID único: ${intervention.id || "vazio"}.`);
     }
     interventionIds.add(intervention.id);
-    assertRange(intervention.clockMs, 1, MATCH_DURATION_MS - 1, `Relógio de ${intervention.id}`);
+    const interventionLimit = input.context.rules.drawResolution === "extra_time_and_penalties"
+      ? MAX_MATCH_DURATION_MS
+      : REGULATION_DURATION_MS;
+    assertRange(intervention.clockMs, 1, interventionLimit - 1, `Relógio de ${intervention.id}`);
     const team = knownTeams.get(intervention.teamId);
     const state = runtime.get(intervention.teamId);
     if (!team || !state) throw new Error(`Intervenção ${intervention.id} pertence a equipe desconhecida.`);
@@ -614,6 +630,9 @@ export function validateMatchInput(input: MatchInput) {
   assertRange(input.context.possessionsPerPeriod, 1, 100, "Posses por período");
   assertRange(input.context.importance, 0, 100, "Importância da partida");
   assertRange(input.context.rules.maxSubstitutions, 0, 12, "Limite de substituições");
+  if (!["allow_draw", "extra_time_and_penalties"].includes(input.context.rules.drawResolution)) {
+    throw new Error("Regra de desempate inválida.");
+  }
   assertRange(input.context.referee.strictness, 0, 100, "Rigor do árbitro");
   assertRange(input.context.referee.cardTendency, 0, 100, "Tendência de cartões do árbitro");
   assertRange(input.context.referee.penaltyTendency, 0, 100, "Tendência de pênaltis do árbitro");

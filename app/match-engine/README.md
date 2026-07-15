@@ -1,4 +1,4 @@
-# Motor de partida vNext — MP-0 a MP-6
+# Motor de partida vNext — MP-0 a MP-7
 
 Este diretório contém o novo núcleo causal do Eterno FC. Desde o MP-6, ele decide partidas elegíveis da carreira do usuário e alimenta diretamente o campinho 2D, a narração, as estatísticas e o placar.
 
@@ -35,21 +35,23 @@ Este diretório contém o novo núcleo causal do Eterno FC. Desde o MP-6, ele de
 - faltas diretas, escanteios e pênaltis resolvidos pelos atributos pertinentes;
 - rebotes encadeados à defesa que os originou, com uma segunda bola limitada;
 - acréscimos calculados por incidentes e convertidos em posses extras auditáveis;
+- prorrogação com dois períodos de 15 minutos e disputa por pênaltis registrada cobrança a cobrança;
+- decisão eliminatória separada do placar de jogo, sem transformar pênalti de desempate em gol oficial;
 - adaptador da carreira, comparação em modo sombra e portão de promoção por partida;
 - projeção da timeline canônica no campinho 2D, com portador, bola, zona e sentido do ataque;
 - narração derivada dos eventos e das relações causais, inclusive assistência;
 - coreografia de gol com pausa proporcional à velocidade, rede, autor, assistência e placar confirmado;
 - trilho de incidentes e feed de faltas, cartões, impedimentos, defesas, escanteios, pênaltis e substituições;
-- fallback isolado para o motor legado quando o candidato falha ou ainda não cobre a regra decisiva;
+- fallback isolado para o motor legado quando o candidato falha;
 - estatísticas reconstruídas para todos os confrontos confirmados;
 - testes de replay, causalidade, isolamento, fadiga, pés, especialistas, tática, substituição e regras;
 - calibradores geral, de especialistas, de decisões do treinador e de arbitragem/regras.
 
-## Integração e limite atual
+## Integração atual
 
-O MP-6 promove o vNext somente depois de validar o fim do ledger, o placar, a quantidade de gols e as estatísticas reconstruídas. Quando esse portão passa, o placar vNext é o resultado gravado na carreira e a interface apenas o revela no tempo certo.
+O portão de promoção valida o fim do ledger, o placar, a quantidade de gols, as estatísticas e a decisão eliminatória. Quando ele passa, o placar vNext é o resultado gravado na carreira e a interface apenas o revela no tempo certo.
 
-Partidas eliminatórias de jogo único que terminam empatadas continuam no modo seguro legado até que prorrogação e disputa por pênaltis existam no núcleo. Uma exceção nunca interrompe a rodada nem corrompe o save. Saves existentes permanecem compatíveis.
+Desde o MP-7, um empate em mata-mata de jogo único abre a prorrogação no mesmo ledger. Persistindo a igualdade, `shootout_kick` registra cada cobrador, goleiro, pressão, probabilidade e resultado; `shootout_end` confirma o classificado. O placar de jogo permanece separado do placar dos pênaltis. Saves existentes permanecem compatíveis.
 
 ## Calibração
 

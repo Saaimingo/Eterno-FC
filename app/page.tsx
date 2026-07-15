@@ -372,7 +372,7 @@ function MatchCenter({ game, plan, minute, running, speed, goalMoment, onSpeedCh
   const goalScorer = goalMoment?.playerId ? game.players.find((player) => player.id === goalMoment.playerId) : undefined;
   const goalAssist = goalMoment?.assistPlayerId ? game.players.find((player) => player.id === goalMoment.assistPlayerId) : undefined;
   const goalClub = goalMoment?.teamId === away.id ? away : home;
-  const incidentTypes = new Set(["goal", "chance", "card", "foul", "offside", "save", "corner", "penalty", "substitution"]);
+  const incidentTypes = new Set(["goal", "chance", "card", "foul", "offside", "save", "corner", "penalty", "substitution", "shootout"]);
   const incidents = visibleEvents.filter((event) => incidentTypes.has(event.type)).slice(-5);
   const visibleCorners = visibleEvents.filter((event) => event.type === "corner");
   const visibleCards = visibleEvents.filter((event) => event.type === "card");
@@ -388,7 +388,7 @@ function MatchCenter({ game, plan, minute, running, speed, goalMoment, onSpeedCh
       </header>
       <section className={`live-score ${goalMoment ? "score-pulse" : ""}`}>
         <div><Crest club={home}/><strong>{home.name}</strong></div>
-        <span><small>{minute>=90?"ENCERRADO":running?`${minute}' • AO VIVO`:minute===0?"PRÉ-JOGO":`${minute}' • PAUSADO`}</small><b>{homeGoals} <i>—</i> {awayGoals}</b></span>
+        <span><small>{minute>=plan.durationMinutes?"ENCERRADO":running?`${minute}' • ${minute>90?"PRORROGAÇÃO":"AO VIVO"}`:minute===0?"PRÉ-JOGO":`${minute}' • PAUSADO`}</small><b>{homeGoals} <i>—</i> {awayGoals}</b>{plan.shootoutScore&&minute>=plan.durationMinutes&&<em>PÊNALTIS {plan.shootoutScore[0]} — {plan.shootoutScore[1]}</em>}</span>
         <div><Crest club={away}/><strong>{away.name}</strong></div>
       </section>
       <section className="possession-readout" style={{"--possession-color":possessionClub.primary} as CSSProperties}>
@@ -424,7 +424,7 @@ function MatchCenter({ game, plan, minute, running, speed, goalMoment, onSpeedCh
         <div className="match-stat"><span>POSSE</span><b>{plan.homePossession}%</b><i><em style={{width:`${plan.homePossession}%`}}/></i><b>{100-plan.homePossession}%</b></div>
         <div className="match-stat"><span>FINALIZAÇÕES</span><b>{Math.round(plan.homeShots*minute/90)}</b><i><em style={{width:`${plan.homeShots/shotTotal*100}%`}}/></i><b>{Math.round(plan.awayShots*minute/90)}</b></div>
         <div className="live-detail"><span>ESCANTEIOS <b>{visibleCorners.filter((event)=>event.teamId===home.id).length} — {visibleCorners.filter((event)=>event.teamId===away.id).length}</b></span><span>CARTÕES <b>{visibleCards.filter((event)=>event.teamId===home.id).length} — {visibleCards.filter((event)=>event.teamId===away.id).length}</b></span></div>
-        <div className="match-controls">{minute<90&&<div className="speed-controls" aria-label="Velocidade da partida">{(["Lenta","Normal","Rápida","Ultra"] as const).map((option)=><button className={speed===option?"active":""} onClick={()=>onSpeedChange(option)} key={option}>{option}</button>)}</div>}{minute<90?<><button className="secondary-button" onClick={onToggle}>{running?"PAUSAR":"CONTINUAR"}</button><button className="primary-button" onClick={onSkip}>IR AO FIM ›</button></>:<button className="primary-button" onClick={onFinish}>VOLTAR AO VESTIÁRIO ›</button>}</div>
+        <div className="match-controls">{minute<plan.durationMinutes&&<div className="speed-controls" aria-label="Velocidade da partida">{(["Lenta","Normal","Rápida","Ultra"] as const).map((option)=><button className={speed===option?"active":""} onClick={()=>onSpeedChange(option)} key={option}>{option}</button>)}</div>}{minute<plan.durationMinutes?<><button className="secondary-button" onClick={onToggle}>{running?"PAUSAR":"CONTINUAR"}</button><button className="primary-button" onClick={onSkip}>IR AO FIM ›</button></>:<button className="primary-button" onClick={onFinish}>VOLTAR AO VESTIÁRIO ›</button>}</div>
       </footer>
     </div>
   );
@@ -448,15 +448,15 @@ export default function Home() {
   useEffect(()=>{if(!ready||!careers.length)return;void saveCareerState({careers,activeId}).catch(()=>undefined);},[careers,activeId,ready]);
   useEffect(()=>{
     if(!running||!matchPlan||goalMoment)return;
-    if(minute>=90)return;
+    if(minute>=matchPlan.durationMinutes)return;
     const delay={Lenta:650,Normal:260,Rápida:90,Ultra:24}[matchSpeed];
-    const nextMinute=Math.min(90,minute+1);
+    const nextMinute=Math.min(matchPlan.durationMinutes,minute+1);
     const timer=window.setTimeout(()=>{
       const goals=matchPlan.events.filter((event)=>event.type==="goal"&&event.minute===nextMinute&&event.id&&!seenGoalsRef.current.has(event.id));
       goals.forEach((event)=>seenGoalsRef.current.add(event.id!));
       setMinute(nextMinute);
       if(goals.length){setGoalMoment(goals[0]);setGoalQueue(goals.slice(1));}
-      if(nextMinute>=90)setRunning(false);
+      if(nextMinute>=matchPlan.durationMinutes)setRunning(false);
     },delay);
     return()=>window.clearTimeout(timer);
   },[running,matchPlan,matchSpeed,minute,goalMoment]);
@@ -506,7 +506,7 @@ export default function Home() {
       </section>
 
       {matchPlan && (
-        <MatchCenter game={game} plan={matchPlan} minute={minute} running={running} speed={matchSpeed} goalMoment={goalMoment} onSpeedChange={setMatchSpeed} onToggle={()=>setRunning((value)=>!value)} onSkip={()=>{resetGoalPresentation();setMinute(90);setRunning(false);}} onFinish={finishMatch} onClose={()=>{if(minute===0||minute>=90){setMatchPlan(null);setRunning(false);resetGoalPresentation();}}}/>
+        <MatchCenter game={game} plan={matchPlan} minute={minute} running={running} speed={matchSpeed} goalMoment={goalMoment} onSpeedChange={setMatchSpeed} onToggle={()=>setRunning((value)=>!value)} onSkip={()=>{resetGoalPresentation();setMinute(matchPlan.durationMinutes);setRunning(false);}} onFinish={finishMatch} onClose={()=>{if(minute===0||minute>=matchPlan.durationMinutes){setMatchPlan(null);setRunning(false);resetGoalPresentation();}}}/>
       )}
       {careerModal && (
         <CareerModal game={game} careers={careers} onClose={()=>setCareerModal(false)} onSelect={(id)=>{setActiveId(id);setSection("Visão geral");setCareerModal(false);}} onCreate={createCareer} onDelete={(id)=>setCareers((items)=>items.filter((item)=>item.id!==id))} onImport={importCareer} onSync={update}/>

@@ -32,6 +32,8 @@ const DISPLAY_EVENT_TYPES = new Set([
   "tactical_change",
   "stoppage_time",
   "period_end",
+  "shootout_kick",
+  "shootout_end",
   "match_end",
 ]);
 
@@ -60,19 +62,35 @@ export function candidateCanDriveMatch(game: GameState, fixture: Fixture, result
     && result.statistics.home.goals === score[0]
     && result.statistics.away.goals === score[1];
   if (!validLedger) return false;
-  if (isSingleLegKnockout(game, fixture) && scoreOutcome(score) === "draw") return false;
+  const decisionWinner = result.decision.winnerTeamId;
+  const winnerBelongsToMatch = !decisionWinner || decisionWinner === fixture.homeId || decisionWinner === fixture.awayId;
+  if (!winnerBelongsToMatch) return false;
+  if (scoreOutcome(score) === "home" && decisionWinner !== fixture.homeId) return false;
+  if (scoreOutcome(score) === "away" && decisionWinner !== fixture.awayId) return false;
+  if (isSingleLegKnockout(game, fixture)) {
+    if (!decisionWinner || result.decision.method === "draw") return false;
+    if (result.decision.method === "penalties") {
+      const shootoutEnd = result.events.find((event) => event.type === "shootout_end");
+      if (!shootoutEnd || shootoutEnd.teamId !== decisionWinner || !result.decision.shootoutScore) return false;
+    }
+  } else if (scoreOutcome(score) === "draw" && (decisionWinner || result.decision.method !== "draw")) return false;
   return true;
 }
 
 function minuteFor(event: CanonicalMatchEvent) {
   const natural = Math.max(1, Math.floor(event.clockMs / 60_000) + 1);
-  return event.period === 1 ? Math.min(45, natural) : Math.min(90, natural);
+  if (event.period === 1) return Math.min(45, natural);
+  if (event.period === 2) return Math.min(90, natural);
+  if (event.period === 3) return Math.min(105, Math.max(91, natural));
+  return Math.min(120, Math.max(106, natural));
 }
 
 function minuteLabelFor(event: CanonicalMatchEvent) {
+  if (event.type === "shootout_kick") return `PÊN. ${Number(event.audit?.details?.teamKick ?? 1)}`;
+  if (event.type === "shootout_end") return "PÊN.";
   const minute = minuteFor(event);
-  const periodEnd = event.period === 1 ? 45 : 90;
-  const periodEndMs = event.period === 1 ? 2_700_000 : 5_400_000;
+  const periodEnd = event.period === 1 ? 45 : event.period === 2 ? 90 : event.period === 3 ? 105 : 120;
+  const periodEndMs = event.period === 1 ? 2_700_000 : event.period === 2 ? 5_400_000 : event.period === 3 ? 6_300_000 : 7_200_000;
   const stoppage = event.tags.includes("stoppage_time")
     || (periodEndMs - event.clockMs < 9_000 && !["period_end", "match_end"].includes(event.type));
   return stoppage ? `${periodEnd}+'` : `${minute}'`;
@@ -94,6 +112,7 @@ function displayType(event: CanonicalMatchEvent): MatchEventType {
   if (event.type === "penalty_kick") return "penalty";
   if (event.type === "rebound") return "rebound";
   if (event.type === "substitution") return "substitution";
+  if (event.type === "shootout_kick" || event.type === "shootout_end") return "shootout";
   if (["shot", "dribble_won", "cross_completed"].includes(event.type)) return "chance";
   return "comment";
 }
@@ -128,7 +147,13 @@ function narration(
   const teamName = game.clubs.find((club) => club.id === event.teamId)?.name ?? "a equipe";
   const actor = playerName(event.actorId);
   const target = playerName(event.targetId);
-  if (event.type === "kickoff") return event.period === 1 ? "A bola está rolando." : "Começa o segundo tempo.";
+  if (event.type === "kickoff") {
+    if (event.outcome === "restarted_after_goal") return `${teamName} recoloca a bola em jogo.`;
+    if (event.period === 1) return "A bola está rolando.";
+    if (event.period === 2) return "Começa o segundo tempo.";
+    if (event.period === 3) return "Começa a prorrogação.";
+    return "Começa o segundo tempo da prorrogação.";
+  }
   if (event.type === "goal") {
     const creator = findCreator(event, eventsById);
     const finish = event.tags.includes("header")
@@ -168,12 +193,25 @@ function narration(
   if (event.type === "cross_completed") return `${actor} encontra espaço e coloca a bola na área.`;
   if (event.type === "substitution") return `${playerName(event.targetId)} entra no lugar de ${actor}.`;
   if (event.type === "tactical_change") return `${teamName} muda seu desenho tático.`;
+  if (event.type === "shootout_kick") {
+    if (event.outcome === "scored") return `${actor} converte a cobrança para ${teamName}.`;
+    if (event.outcome === "saved") return `${target} defende a cobrança de ${actor}!`;
+    return `${actor} manda para fora na disputa por pênaltis.`;
+  }
+  if (event.type === "shootout_end") return `${teamName.toUpperCase()} VENCE A DISPUTA POR PÊNALTIS!`;
   if (event.type === "stoppage_time") {
     const seconds = Number(event.audit?.details?.addedSeconds ?? 0);
     return `A arbitragem indica ${Math.max(1, Math.round(seconds / 60))} minuto(s) de acréscimo.`;
   }
-  if (event.type === "period_end") return event.period === 1 ? "Fim do primeiro tempo." : "Fim do tempo regulamentar.";
-  if (event.type === "match_end") return "Apita o árbitro. Fim de jogo.";
+  if (event.type === "period_end") {
+    if (event.period === 1) return "Fim do primeiro tempo.";
+    if (event.period === 2) return event.tags.includes("extra_time_required") ? "Fim do tempo regulamentar. Teremos prorrogação." : "Fim do tempo regulamentar.";
+    if (event.period === 3) return "Intervalo da prorrogação.";
+    return "Fim da prorrogação.";
+  }
+  if (event.type === "match_end") return event.tags.includes("penalty_shootout")
+    ? "Fim de jogo após a disputa por pênaltis."
+    : event.tags.includes("extra_time") ? "Fim de jogo após a prorrogação." : "Apita o árbitro. Fim de jogo.";
   return `${teamName} avança e mantém a pressão.`;
 }
 
@@ -214,7 +252,8 @@ function projectPhases(fixture: Fixture, result: MatchResult): readonly MatchPha
   const phases: MatchPhase[] = [];
   let cursor = 0;
   let current = timeline[0];
-  for (let minute = 1; minute <= 90; minute += 1) {
+  const durationMinutes = result.decision.method === "extra_time" || result.decision.method === "penalties" ? 120 : 90;
+  for (let minute = 1; minute <= durationMinutes; minute += 1) {
     while (cursor < timeline.length && minuteFor(timeline[cursor]) <= minute) {
       current = timeline[cursor];
       cursor += 1;
@@ -263,6 +302,10 @@ export function projectVNextMatchPlan(
     engineVersion: result.engineVersion,
     homeGoals: score[0],
     awayGoals: score[1],
+    durationMinutes: result.decision.method === "extra_time" || result.decision.method === "penalties" ? 120 : 90,
+    decisionMethod: result.decision.method,
+    winnerTeamId: result.decision.winnerTeamId ?? undefined,
+    shootoutScore: result.decision.shootoutScore,
     events,
     phases: projectPhases(fixture, result),
     homePossession: Math.round(result.statistics.home.possessionPercentage),

@@ -292,6 +292,12 @@ function adaptTeam(game: GameState, teamId: string): TeamSnapshot {
 export function createVNextMatchInput(game: GameState, fixture: Fixture): MatchInput {
   const random = seededRandom(`${fixture.id}-referee`);
   const competition = game.competitions.find((candidate) => candidate.id === fixture.competitionId);
+  const singleLegKnockout = Boolean(
+    competition
+      && (competition.type === "cup" || competition.type === "continental")
+      && fixture.stage !== "Fase de grupos"
+      && !fixture.tieId,
+  );
   const input = Object.freeze({
     context: Object.freeze({
       matchId: fixture.id,
@@ -305,6 +311,7 @@ export function createVNextMatchInput(game: GameState, fixture: Fixture): MatchI
         secondYellowDismissal: true,
         offsideEnabled: true,
         stoppageTimeEnabled: true,
+        drawResolution: singleLegKnockout ? "extra_time_and_penalties" : "allow_draw",
       }),
       referee: Object.freeze({
         strictness: 42 + Math.round(random() * 22),

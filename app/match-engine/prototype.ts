@@ -277,6 +277,7 @@ export function createPrototypeMatchInput(seed: string, possessionsPerPeriod = 4
         secondYellowDismissal: true,
         offsideEnabled: true,
         stoppageTimeEnabled: true,
+        drawResolution: "allow_draw",
       }),
       referee: Object.freeze({
         strictness: 52,
