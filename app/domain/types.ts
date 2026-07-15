@@ -66,6 +66,10 @@ export type Fixture = {
   played: boolean;
   homeGoals: number | null;
   awayGoals: number | null;
+  winnerId?: string;
+  decision?: "regulation" | "extra_time" | "penalties";
+  shootoutHomeGoals?: number;
+  shootoutAwayGoals?: number;
 };
 
 export type Standing = {
@@ -186,7 +190,7 @@ export type GameState = {
   lastSavedAt: string;
 };
 
-export type MatchEventType = "goal" | "chance" | "card" | "injury" | "comment" | "foul" | "offside" | "save" | "corner" | "substitution" | "penalty" | "rebound";
+export type MatchEventType = "goal" | "chance" | "card" | "injury" | "comment" | "foul" | "offside" | "save" | "corner" | "substitution" | "penalty" | "rebound" | "shootout";
 export type PitchCoordinate = { x: number; y: number };
 export type MatchEvent = {
   id?: string;
@@ -233,6 +237,10 @@ export type MatchPlan = {
   engineVersion?: string;
   homeGoals: number;
   awayGoals: number;
+  durationMinutes: 90 | 120;
+  decisionMethod?: "draw" | "regulation" | "extra_time" | "penalties";
+  winnerTeamId?: string;
+  shootoutScore?: readonly [number, number];
   events: readonly MatchEvent[];
   phases: readonly MatchPhase[];
   homePossession: number;
