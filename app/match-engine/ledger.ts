@@ -184,11 +184,13 @@ export function assertLedgerInvariants(
     if (["cross_completed", "cross_failed"].includes(event.type) && !causeTypes.includes("cross_attempt")) {
       throw new Error(`${event.type} deve ser causado por cross_attempt.`);
     }
-    if (["goalkeeper_claim", "goalkeeper_punch"].includes(event.type) && !causeTypes.includes("cross_completed")) {
-      throw new Error(`${event.type} deve ser causado por cross_completed.`);
+    if (["goalkeeper_claim", "goalkeeper_punch"].includes(event.type)
+      && !causeTypes.some((type) => ["cross_completed", "corner", "free_kick"].includes(type ?? ""))) {
+      throw new Error(`${event.type} deve ser causado por cruzamento ou bola parada entregue.`);
     }
-    if (event.type === "aerial_duel" && !causeTypes.includes("cross_completed")) {
-      throw new Error("aerial_duel deve ser causado por cross_completed.");
+    if (event.type === "aerial_duel"
+      && !causeTypes.some((type) => ["cross_completed", "corner", "free_kick"].includes(type ?? ""))) {
+      throw new Error("aerial_duel deve ser causado por cruzamento ou bola parada entregue.");
     }
     if (["save", "goal"].includes(event.type) && !causeTypes.includes("shot")) {
       throw new Error(`${event.type} deve ser causado por shot.`);
@@ -202,6 +204,36 @@ export function assertLedgerInvariants(
     }
     if (event.type === "tactical_change" && !event.teamId) {
       throw new Error("tactical_change deve pertencer a uma equipe.");
+    }
+    if (event.type === "foul"
+      && (!event.teamId || !event.actorId || !event.targetId || event.actorId === event.targetId || event.causes.length !== 1)) {
+      throw new Error("foul deve identificar infrator, vítima e uma causa anterior.");
+    }
+    if (event.type === "offside" && !causeTypes.includes("pass_attempt")) {
+      throw new Error("offside deve ser causado por pass_attempt.");
+    }
+    if (event.type === "yellow_card" && !causeTypes.includes("foul")) {
+      throw new Error("yellow_card deve ser causado por foul.");
+    }
+    if (event.type === "red_card" && !causeTypes.some((type) => type === "foul" || type === "yellow_card")) {
+      throw new Error("red_card deve ser causado por foul ou yellow_card.");
+    }
+    if (event.type === "free_kick"
+      && !causeTypes.some((type) => ["foul", "yellow_card", "red_card"].includes(type ?? ""))) {
+      throw new Error("free_kick deve nascer de uma infração disciplinar.");
+    }
+    if (event.type === "penalty_kick"
+      && !causeTypes.some((type) => ["foul", "yellow_card", "red_card"].includes(type ?? ""))) {
+      throw new Error("penalty_kick deve nascer de uma infração disciplinar.");
+    }
+    if (event.type === "corner" && !causeTypes.some((type) => ["cross_failed", "save", "shot"].includes(type ?? ""))) {
+      throw new Error("corner deve ser causado por desvio defensivo confirmado.");
+    }
+    if (event.type === "rebound" && !causeTypes.includes("save")) {
+      throw new Error("rebound deve ser causado por save.");
+    }
+    if (event.type === "stoppage_time" && event.causes.length !== 1) {
+      throw new Error("stoppage_time deve ter exatamente uma causa anterior.");
     }
     if (event.type === "match_end" && !causeTypes.includes("period_end")) {
       throw new Error("match_end deve ser causado por period_end.");
