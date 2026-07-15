@@ -186,8 +186,33 @@ export type GameState = {
   lastSavedAt: string;
 };
 
-export type MatchEvent = { minute: number; type: "goal" | "chance" | "card" | "injury" | "comment"; teamId: string; playerId?: string; text: string };
-export type MatchPhase = { start: number; end: number; teamId: string; zone: "saída" | "meio" | "ataque"; carrier: number };
+export type MatchEventType = "goal" | "chance" | "card" | "injury" | "comment" | "foul" | "offside" | "save" | "corner" | "substitution" | "penalty" | "rebound";
+export type PitchCoordinate = { x: number; y: number };
+export type MatchEvent = {
+  id?: string;
+  sequence?: number;
+  minute: number;
+  minuteLabel?: string;
+  type: MatchEventType;
+  teamId: string;
+  playerId?: string;
+  assistPlayerId?: string;
+  text: string;
+  detail?: string;
+  origin?: PitchCoordinate;
+  destination?: PitchCoordinate;
+  scoreAfter?: readonly [number, number];
+};
+export type MatchPhase = {
+  start: number;
+  end: number;
+  teamId: string;
+  zone: "saída" | "meio" | "ataque";
+  carrier: number;
+  carrierId?: string;
+  eventId?: string;
+  ball?: PitchCoordinate;
+};
 export type ShadowMatchComparison = {
   status: "ready" | "failed";
   engineVersion: string;
@@ -204,12 +229,18 @@ export type ShadowMatchComparison = {
 
 export type MatchPlan = {
   fixtureId: string;
+  engineSource?: "legacy" | "vnext";
+  engineVersion?: string;
   homeGoals: number;
   awayGoals: number;
-  events: MatchEvent[];
-  phases: MatchPhase[];
+  events: readonly MatchEvent[];
+  phases: readonly MatchPhase[];
   homePossession: number;
   homeShots: number;
   awayShots: number;
+  homeCorners?: number;
+  awayCorners?: number;
+  homeCards?: number;
+  awayCards?: number;
   shadow?: ShadowMatchComparison;
 };
