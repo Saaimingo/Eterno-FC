@@ -276,3 +276,59 @@ button:focus-visible { outline: 3px solid #efb54a; outline-offset: 2px; }
   .job-card { grid-template-columns:42px 1fr; }.job-card button { grid-column:1/-1; }.manager-history { overflow-x:auto; }.manager-history > div:not(.panel-title) { min-width:570px; }
   .career-current { gap:14px; }.career-current > div { align-items:flex-start; }.resign-button { align-self:flex-start; }
 }
+
+/* MP-6: timeline causal, campo 2D e coreografia de gol */
+.engine-badge { align-self:center; padding:6px 9px; border:1px solid rgba(255,255,255,.13); border-radius:999px; color:#9da9bc!important; background:rgba(255,255,255,.04); font-size:6px!important; letter-spacing:.09em!important; }
+.engine-badge.vnext { color:var(--lime)!important; border-color:rgba(185,220,117,.3); background:rgba(185,220,117,.07); }
+.possession-readout > .crest { flex:0 0 auto; }
+.match-body { grid-template-columns:minmax(520px,1.6fr) minmax(300px,.75fr); }
+.pitch-column { display:flex; min-width:0; min-height:0; flex-direction:column; gap:8px; }
+.pitch-goal { position:absolute; z-index:2; top:50%; width:18px; height:104px; overflow:hidden; border:2px solid rgba(255,255,255,.82); transform:translateY(-50%); box-shadow:inset 0 0 0 1px rgba(8,24,36,.15); }
+.pitch-goal.left { left:0; border-left:0; }
+.pitch-goal.right { right:0; border-right:0; }
+.pitch-goal i { position:absolute; inset:0; background:repeating-linear-gradient(0deg,transparent 0 9px,rgba(255,255,255,.34) 9px 10px),repeating-linear-gradient(90deg,transparent 0 7px,rgba(255,255,255,.3) 7px 8px); }
+.goal-celebration { position:absolute; z-index:12; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; padding:25px; text-align:center; background:radial-gradient(circle at 50% 45%,color-mix(in srgb,var(--goal-color) 68%,transparent),rgba(4,14,28,.88) 54%,rgba(4,14,28,.96)); animation:goal-reveal .34s cubic-bezier(.2,.85,.3,1); }
+.goal-celebration::before,.goal-celebration::after { content:""; position:absolute; width:150px; height:150px; border:1px solid rgba(255,255,255,.18); border-radius:50%; animation:goal-ring 1.25s ease-out infinite; }
+.goal-celebration::after { animation-delay:.34s; }
+.goal-celebration small { color:#fff; font-size:7px; font-weight:900; letter-spacing:.16em; }
+.goal-celebration strong { margin:7px 0 2px; color:var(--lime); font-family:Georgia,serif; font-size:clamp(43px,7vw,84px); font-style:italic; letter-spacing:-.05em; line-height:.88; text-shadow:0 6px 35px rgba(185,220,117,.28); }
+.goal-celebration b { margin-top:8px; font-family:Georgia,serif; font-size:clamp(18px,2.3vw,30px); }
+.goal-celebration span { margin-top:4px; color:#d6deea; font-size:8px; }
+.goal-celebration em { margin-top:13px; padding:7px 14px; border:1px solid rgba(255,255,255,.22); border-radius:999px; color:#fff; background:rgba(1,9,19,.45); font-family:Georgia,serif; font-size:19px; font-style:normal; }
+.score-pulse > span b { animation:score-pop .52s cubic-bezier(.2,.9,.35,1); color:var(--lime); }
+.celebrating .ball { animation:ball-in-net .48s ease-out both; }
+.incident-rail { display:grid; min-height:70px; grid-auto-columns:minmax(150px,1fr); grid-auto-flow:column; gap:7px; overflow-x:auto; scroll-snap-type:x proximity; }
+.incident-rail article { display:grid; min-width:0; grid-template-columns:34px 1fr; align-items:center; gap:7px; padding:8px 10px; border:1px solid rgba(255,255,255,.09); border-radius:5px; background:#0c1b32; scroll-snap-align:end; }
+.incident-rail article strong { color:#8391a7; font-family:Georgia,serif; font-size:12px; }
+.incident-rail article span { display:-webkit-box; overflow:hidden; color:#aeb8c8; font-size:7px; line-height:1.35; -webkit-box-orient:vertical; -webkit-line-clamp:3; }
+.incident-rail article.goal { border-color:rgba(185,220,117,.35); background:linear-gradient(135deg,rgba(185,220,117,.15),#0c1b32); }
+.incident-rail article.goal strong,.incident-rail article.goal span { color:var(--lime); }
+.incident-rail article.card { border-bottom-color:#e0bf52; }.incident-rail article.penalty { border-bottom-color:#e16b68; }.incident-rail article.save { border-bottom-color:#67b9df; }
+.event-list article.foul strong,.event-list article.offside strong { color:#ee9c62; }
+.event-list article.save strong { color:#67b9df; }.event-list article.corner strong { color:#83c993; }.event-list article.penalty strong { color:#ef7774; }.event-list article.substitution strong { color:#a88ee5; }
+.match-overlay > footer { grid-template-columns:1fr 1fr auto minmax(390px,1.45fr); gap:20px; }
+.live-detail { display:flex; align-items:center; gap:13px; }
+.live-detail > span { display:flex; flex-direction:column; gap:4px; color:#78869b; font-size:6px; font-weight:900; letter-spacing:.06em; }
+.live-detail b { color:#fff; font-size:8px; }
+
+@keyframes goal-reveal { from { transform:scale(.96); } to { transform:scale(1); } }
+@keyframes goal-ring { from { opacity:.55; transform:scale(.45); } to { opacity:0; transform:scale(1.55); } }
+@keyframes score-pop { 0% { transform:scale(.82); } 55% { transform:scale(1.24); } 100% { transform:scale(1); } }
+@keyframes ball-in-net { 0% { transform:scale(1); } 65% { transform:scale(1.8); } 100% { transform:scale(1.2); } }
+
+@media (max-width:1050px) {
+  .match-overlay > footer { grid-template-columns:1fr 1fr; }.live-detail { justify-content:center; }.match-controls { grid-column:auto; }
+  .engine-badge { display:none; }
+}
+@media (max-width:840px) {
+  .match-body { grid-template-columns:1fr; }.pitch-column { min-height:460px; }.incident-rail { min-height:66px; }.match-overlay > footer { grid-template-columns:1fr 1fr; }
+  .match-controls { grid-column:1/-1; }.live-detail { display:none; }
+}
+@media (max-width:620px) {
+  .pitch-column { min-height:405px; }.incident-rail { min-height:66px; grid-auto-columns:minmax(170px,78vw); }
+  .goal-celebration strong { font-size:47px; }.goal-celebration b { font-size:18px; }
+  .match-overlay > footer { grid-template-columns:1fr; }.live-detail { display:none; }
+}
+@media (prefers-reduced-motion:reduce) {
+  .goal-celebration,.goal-celebration::before,.goal-celebration::after,.score-pulse > span b,.celebrating .ball { animation:none; }
+}

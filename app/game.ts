@@ -9,7 +9,9 @@ import { REGIONAL_CUP_FORMATS_2026 } from "./rules/regional-cups-2026";
 import { BRAZIL_SUPER_CUP_2026, resolveSuperCupParticipants } from "./rules/super-cup";
 import { serieCFormatForSeason, splitSerieCAccessGroups } from "./rules/serie-c";
 import { resolveClubDateConflicts } from "./rules/calendar-conflicts";
-import { runShadowMatch } from "./match-adapter";
+import { MATCH_ENGINE_VERSION } from "./match-engine";
+import { compareShadowMatch, simulateVNextFixture } from "./match-adapter";
+import { candidateCanDriveMatch, projectVNextMatchPlan } from "./match-presentation";
 import type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, Intensity, JobVacancy, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
 
 export type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, IncomingBid, Intensity, JobVacancy, League, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
@@ -326,22 +328,17 @@ export function buildLegacyMatchPlan(game:GameState,fixture:Fixture):MatchPlan {
   const phases:MatchPhase[]=[];let start=0,teamId=random()>.5?fixture.homeId:fixture.awayId;
   while(start<90){const length=3+Math.floor(random()*5),end=Math.min(90,start+length);if(random()>.36)teamId=teamId===fixture.homeId?fixture.awayId:fixture.homeId;const progress=random();phases.push({start,end,teamId,zone:progress>.66?"ataque":progress>.28?"meio":"saída",carrier:Math.floor(random()*10)});start=end;}
   events.filter((event)=>event.type==="goal"||event.type==="chance").forEach((event)=>{const phase=phases.find((item)=>event.minute>=item.start&&event.minute<=item.end);if(phase){phase.teamId=event.teamId;phase.zone="ataque";}});
-  const homePossession=clamp(Math.round(50+(homeStrength-awayStrength)*1.25),34,66);
-  return{fixtureId:fixture.id,homeGoals,awayGoals,events,phases,homePossession,homeShots:Math.max(homeGoals+2,7+Math.round((homeStrength-awayStrength)/5+random()*5)),awayShots:Math.max(awayGoals+2,6+Math.round((awayStrength-homeStrength)/5+random()*5))};
+  const homePossession=clamp(Math.round(50+(homeStrength-awayStrength)*1.25),34,66);let runningHome=0,runningAway=0;
+  const presentedEvents=events.map((event,index)=>{if(event.type==="goal"){if(event.teamId===fixture.homeId)runningHome+=1;else runningAway+=1;}return{...event,id:`legacy-${fixture.id}-${index+1}`,sequence:index+1,minuteLabel:`${event.minute}'`,scoreAfter:[runningHome,runningAway] as const};});
+  return{fixtureId:fixture.id,engineSource:"legacy",engineVersion:"legacy-v2",homeGoals,awayGoals,events:presentedEvents,phases,homePossession,homeShots:Math.max(homeGoals+2,7+Math.round((homeStrength-awayStrength)/5+random()*5)),awayShots:Math.max(awayGoals+2,6+Math.round((awayStrength-homeStrength)/5+random()*5)),homeCorners:0,awayCorners:0,homeCards:events.filter((event)=>event.type==="card"&&event.teamId===fixture.homeId).length,awayCards:events.filter((event)=>event.type==="card"&&event.teamId===fixture.awayId).length};
 }
 
 export function buildMatchPlan(game:GameState,fixture:Fixture):MatchPlan {
   const legacy=buildLegacyMatchPlan(game,fixture);
-  return{
-    ...legacy,
-    shadow:runShadowMatch(
-      game,
-      fixture,
-      [legacy.homeGoals,legacy.awayGoals],
-      [legacy.homeShots,legacy.awayShots],
-      legacy.homePossession,
-    ),
-  };
+  try{
+    const candidate=simulateVNextFixture(game,fixture),shadow=compareShadowMatch([legacy.homeGoals,legacy.awayGoals],[legacy.homeShots,legacy.awayShots],legacy.homePossession,candidate);
+    return candidateCanDriveMatch(game,fixture,candidate)?projectVNextMatchPlan(game,fixture,candidate,shadow):{...legacy,shadow};
+  }catch(error){return{...legacy,shadow:{status:"failed",engineVersion:MATCH_ENGINE_VERSION,legacyScore:[legacy.homeGoals,legacy.awayGoals],failureReason:error instanceof Error?error.message:"Falha desconhecida no motor candidato."}};}
 }
 
 function playFixture(game:GameState,fixture:Fixture,salt:string):Fixture{const score=scoreFixture(game,fixture,salt);return{...fixture,played:true,homeGoals:score.homeGoals,awayGoals:score.awayGoals};}

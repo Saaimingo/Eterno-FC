@@ -61,7 +61,7 @@ function competitionImportance(competition: Competition | undefined, fixture: Fi
   return fixture.round > 30 ? 72 : 58;
 }
 
-function selectMatchPlayers(game: GameState, teamId: string) {
+export function selectVNextMatchPlayers(game: GameState, teamId: string) {
   const available = game.players
     .filter((player) => player.clubId === teamId && !player.academy && !player.injuredMatches)
     .sort((left, right) => Number(right.starting) - Number(left.starting) || right.rating - left.rating || left.id.localeCompare(right.id));
@@ -266,7 +266,7 @@ function tacticalPlan(game: GameState, teamId: string): TacticalPlan {
 function adaptTeam(game: GameState, teamId: string): TeamSnapshot {
   const club = game.clubs.find((candidate) => candidate.id === teamId);
   if (!club) throw new Error(`Clube desconhecido no adaptador: ${teamId}.`);
-  const selected = selectMatchPlayers(game, teamId);
+  const selected = selectVNextMatchPlayers(game, teamId);
   const players = Object.freeze(selected.starters.map((player) => adaptPlayer(player, teamId)));
   const bench = Object.freeze(selected.bench.map((player) => adaptPlayer(player, teamId)));
   const assignments: readonly RoleAssignment[] = Object.freeze(players.map((player, index) => {

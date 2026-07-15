@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildLegacyMatchPlan,
-  buildMatchPlan,
   createNewGame,
   nextUserFixture,
 } from "../app/game.ts";
@@ -33,18 +32,19 @@ test("adapts a live career fixture into a valid MP-5 input", () => {
   assert.ok(input.home.players.some((player) => player.attributes.crossing !== player.attributes.finishing));
 });
 
-test("keeps the legacy plan canonical while the candidate runs in shadow", () => {
+test("keeps the legacy plan unchanged while the candidate runs in shadow", () => {
   const { game, fixture } = matchContext("legacy-canonical");
   const legacy = buildLegacyMatchPlan(game, fixture);
-  const observed = buildMatchPlan(game, fixture);
-  assert.deepEqual(
-    { ...observed, shadow: undefined },
-    { ...legacy, shadow: undefined },
+  const observed = runShadowMatch(
+    game,
+    fixture,
+    [legacy.homeGoals, legacy.awayGoals],
+    [legacy.homeShots, legacy.awayShots],
+    legacy.homePossession,
   );
-  assert.equal(observed.shadow?.status, "ready");
-  assert.deepEqual(observed.shadow?.legacyScore, [legacy.homeGoals, legacy.awayGoals]);
-  assert.equal(observed.homeGoals, legacy.homeGoals);
-  assert.equal(observed.awayGoals, legacy.awayGoals);
+  assert.equal(observed.status, "ready");
+  assert.deepEqual(observed.legacyScore, [legacy.homeGoals, legacy.awayGoals]);
+  assert.equal(legacy.engineSource, "legacy");
 });
 
 test("produces an exact deterministic candidate and comparison fingerprint", () => {
