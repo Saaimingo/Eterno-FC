@@ -191,8 +191,20 @@ function narration(
     : `A defesa afasta a sobra da área.`;
   if (event.type === "dribble_won") return `${actor} vence o marcador no drible e acelera a jogada.`;
   if (event.type === "cross_completed") return `${actor} encontra espaço e coloca a bola na área.`;
-  if (event.type === "substitution") return `${playerName(event.targetId)} entra no lugar de ${actor}.`;
-  if (event.type === "tactical_change") return `${teamName} muda seu desenho tático.`;
+  if (event.type === "substitution") return event.outcome === "completed"
+    ? `${playerName(event.targetId)} entra no lugar de ${actor}.`
+    : `A substituição de ${actor} foi cancelada porque o jogador já não estava disponível.`;
+  if (event.type === "tactical_change") {
+    const serialized = event.audit?.details?.changes;
+    let changes: Record<string, unknown> = {};
+    if (typeof serialized === "string") {
+      try { changes = JSON.parse(serialized) as Record<string, unknown>; } catch { changes = {}; }
+    }
+    if (changes.mentality === "defensive") return `${teamName} fecha as linhas e prepara a saída em contra-ataque.`;
+    if (changes.mentality === "attacking") return `${teamName} adianta o bloco e aumenta a pressão em busca do gol.`;
+    if (changes.attackingFocus === "flanks") return `${teamName} abre o campo e passa a explorar os lados.`;
+    return `${teamName} reequilibra as distâncias e muda seu desenho tático.`;
+  }
   if (event.type === "shootout_kick") {
     if (event.outcome === "scored") return `${actor} converte a cobrança para ${teamName}.`;
     if (event.outcome === "saved") return `${target} defende a cobrança de ${actor}!`;
@@ -227,9 +239,11 @@ function projectEvents(game: GameState, fixture: Fixture, result: MatchResult) {
       type: displayType(event),
       teamId: event.teamId ?? fixture.homeId,
       playerId: event.actorId,
+      targetPlayerId: event.targetId,
       assistPlayerId,
       text: narration(event, game, fixture, byId),
       detail: event.type,
+      outcome: event.outcome,
       origin: normalizePoint(event.origin, event, fixture),
       destination: normalizePoint(event.destination, event, fixture),
       scoreAfter: event.scoreAfter,
