@@ -9,10 +9,11 @@ import type {
   TeamSnapshot,
 } from "./contracts";
 import type { FatigueTracker } from "./physiology";
+import type { DisciplineTracker } from "./rules";
 import { defaultRoleForPosition } from "./tactics";
 
 type Participation = {
-  status: "active" | "substituted" | "bench";
+  status: "active" | "substituted" | "sent_off" | "bench";
   position: MatchPlayer["position"];
   role: PlayerRole;
   enteredAtMs?: number;
@@ -72,6 +73,10 @@ export class TeamMatchRuntime {
     return Object.freeze([...this.#players.values()]);
   }
 
+  isActive(playerId: string) {
+    return this.#activeOrder.includes(playerId);
+  }
+
   snapshot(): TeamSnapshot {
     const deployed = this.#activeOrder.map((playerId) => {
       const player = this.#players.get(playerId);
@@ -116,9 +121,22 @@ export class TeamMatchRuntime {
     incoming.enteredAtMs = intervention.clockMs;
   }
 
+  dismissPlayer(playerId: string, clockMs: number) {
+    const activeIndex = this.#activeOrder.indexOf(playerId);
+    if (activeIndex < 0) return false;
+    this.#activeOrder.splice(activeIndex, 1);
+    this.#assignments.delete(playerId);
+    const participation = this.#participation.get(playerId);
+    if (!participation) throw new Error(`Participação desconhecida: ${playerId}.`);
+    participation.status = "sent_off";
+    participation.exitedAtMs = clockMs;
+    return true;
+  }
+
   applyTacticalChange(intervention: TacticalChangeIntervention) {
     this.#tactics = Object.freeze({ ...this.#tactics, ...intervention.changes });
     for (const assignment of intervention.assignmentChanges) {
+      if (!this.isActive(assignment.playerId)) continue;
       this.#assignments.set(assignment.playerId, assignment);
       const participation = this.#participation.get(assignment.playerId);
       if (participation) {
@@ -128,7 +146,7 @@ export class TeamMatchRuntime {
     }
   }
 
-  states(fatigue: FatigueTracker): readonly PlayerMatchState[] {
+  states(fatigue: FatigueTracker, discipline?: DisciplineTracker): readonly PlayerMatchState[] {
     return Object.freeze(this.allPlayers().map((player) => {
       const participation = this.#participation.get(player.id);
       if (!participation) throw new Error(`Estado de participação ausente para ${player.id}.`);
@@ -136,6 +154,7 @@ export class TeamMatchRuntime {
         playerId: player.id,
         fatigue: Number(fatigue.value(player).toFixed(2)),
         status: participation.status,
+        yellowCards: discipline?.yellowCards(player.id) ?? 0,
         position: participation.position,
         role: participation.role,
         enteredAtMs: participation.enteredAtMs,
