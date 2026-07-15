@@ -1,4 +1,4 @@
-# Motor de partida vNext — MP-0 a MP-4
+# Motor de partida vNext — MP-0 a MP-5
 
 Este diretório contém o novo núcleo causal do Eterno FC. Ele roda em paralelo ao motor legado; ainda não decide as partidas da carreira do usuário.
 
@@ -35,13 +35,14 @@ Este diretório contém o novo núcleo causal do Eterno FC. Ele roda em paralelo
 - faltas diretas, escanteios e pênaltis resolvidos pelos atributos pertinentes;
 - rebotes encadeados à defesa que os originou, com uma segunda bola limitada;
 - acréscimos calculados por incidentes e convertidos em posses extras auditáveis;
+- adaptador da carreira e execução em modo sombra, sem alterar o resultado oficial;
 - estatísticas reconstruídas para todos os confrontos confirmados;
 - testes de replay, causalidade, isolamento, fadiga, pés, especialistas, tática, substituição e regras;
 - calibradores geral, de especialistas, de decisões do treinador e de arbitragem/regras.
 
 ## Limite de integração
 
-O motor só substituirá o legado depois de receber um adaptador explícito e passar pela integração gradual com a carreira. Até lá, nenhum save existente ou resultado da interface é alterado.
+O adaptador do MP-5 executa o núcleo em modo sombra e compara as duas saídas, mas o placar legado ainda é o único gravado na carreira. A promoção só acontece por uma integração visual explícita e testada; saves existentes permanecem compatíveis.
 
 ## Calibração
 
@@ -50,6 +51,7 @@ npm run calibrate:match-engine -- 10000
 npm run calibrate:match-engine:specialists -- 1000
 npm run calibrate:match-engine:tactics -- 1000
 npm run calibrate:match-engine:rules -- 1000
+npm run calibrate:match-engine:shadow -- 500
 ```
 
 Os comandos informam distribuição de resultados, ações, fadiga, repetibilidade, diferenças de especialistas, sensibilidade às decisões do treinador e frequência das regras antes da integração visual.
