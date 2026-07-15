@@ -7,6 +7,7 @@ Esta pasta reúne as decisões que guiam o jogo. Ela é parte do produto: qualqu
 1. `eterno-fc-design-v1.md` — visão, escopo e decisões de produto.
 2. `arquitetura-tecnica-proposta-v1.md` — divisão técnica proposta para a evolução do protótipo.
 3. Matrizes de regulamentos — referência para cada calendário e classificação do mundo simulado.
+4. Relatórios `match-engine-mp*.md` — decisões, calibrações e limites de cada marco do motor.
 
 ## Regra de manutenção
 
