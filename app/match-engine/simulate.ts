@@ -28,6 +28,17 @@ import {
   type ShotType,
 } from "./probabilities";
 import { SeededRng } from "./rng";
+import {
+  calculateFoulProbability,
+  calculateOffsideProbability,
+  calculatePenaltyAwardProbability,
+  calculateReboundProbability,
+  calculateSanctionProbabilities,
+  calculateSetPieceDeliveryProbability,
+  calculateStoppageSeconds,
+  DisciplineTracker,
+  type RuleProbabilityBreakdown,
+} from "./rules";
 import { TeamMatchRuntime } from "./runtime";
 import { projectStatistics } from "./statistics";
 import {
@@ -68,6 +79,15 @@ type ResolutionContext = Readonly<{
   possessionIndex: number;
   carrier: MatchPlayer;
   marker: MatchPlayer;
+  discipline: DisciplineTracker;
+  runtimes: ReadonlyMap<string, TeamMatchRuntime>;
+  reboundDepth?: number;
+  restartDepth?: number;
+}>;
+
+type PossessionResolution = Readonly<{
+  terminalEvent: CanonicalMatchEvent;
+  goalTeamId: string | null;
 }>;
 
 function laneFor(player: MatchPlayer) {
@@ -213,7 +233,7 @@ function selectPossessionTeam(
   ).item;
 }
 
-function auditComponents(breakdown: ProbabilityBreakdown) {
+function auditComponents(breakdown: ProbabilityBreakdown | RuleProbabilityBreakdown) {
   return Object.freeze({
     attack: Number(breakdown.attack.toFixed(4)),
     defense: Number(breakdown.defense.toFixed(4)),
@@ -227,6 +247,43 @@ function familiarityFor(team: TeamSnapshot, player: MatchPlayer) {
 
 function tacticalDetails(team: TeamSnapshot, player: MatchPlayer) {
   return tacticalAudit(team, player);
+}
+
+function runtimeFor(runtimes: ReadonlyMap<string, TeamMatchRuntime>, teamId: string) {
+  const runtime = runtimes.get(teamId);
+  if (!runtime) throw new Error(`Runtime desconhecido para ${teamId}.`);
+  return runtime;
+}
+
+function pickSetPieceTaker(
+  team: TeamSnapshot,
+  kind: "corner" | "free_kick" | "penalty",
+  rng: SeededRng,
+  label: string,
+) {
+  const candidates = team.players.filter((player) => player.position !== "GK");
+  return rng.weightedPick(candidates, (player) => {
+    const specialty = kind === "corner" ? player.attributes.corners
+      : kind === "free_kick" ? player.attributes.freeKick
+        : player.attributes.penalties;
+    return Math.max(1,
+      specialty * 0.62
+        + player.attributes.technique * 0.15
+        + player.attributes.composure * 0.13
+        + player.attributes.decisions * 0.1,
+    );
+  }, label).item;
+}
+
+function pickReboundAttacker(team: TeamSnapshot, shooter: MatchPlayer, rng: SeededRng, label: string) {
+  const candidates = team.players.filter((player) => player.position !== "GK" && player.id !== shooter.id);
+  return rng.weightedPick(candidates, (player) => {
+    const positionBonus = player.position === "ST" ? 54 : ["AM", "LW", "RW"].includes(player.position) ? 30 : 6;
+    return Math.max(1, positionBonus
+      + player.attributes.anticipation * 0.24
+      + player.attributes.offBall * 0.2
+      + player.attributes.acceleration * 0.12);
+  }, label).item;
 }
 
 function pressureFor(input: {
@@ -271,6 +328,465 @@ function pickAttackAction(carrier: MatchPlayer, team: TeamSnapshot, rng: SeededR
   ).item;
 }
 
+function resolveSetPieceDelivery(
+  input: ResolutionContext,
+  kind: "corner" | "free_kick",
+): PossessionResolution {
+  const { matchInput, ledger, rng, fatigue, team, opponent, period, possessionIndex, carrier } = input;
+  let clockMs = input.clockMs + 350;
+  const target = pickAerialTarget(team, carrier, rng, `p${period}.${possessionIndex}.${kind}.target`);
+  const defender = pickAerialDefender(opponent, rng, `p${period}.${possessionIndex}.${kind}.defender`);
+  const goalkeeper = opponent.players.find((player) => player.position === "GK");
+  if (!goalkeeper) throw new Error(`${opponent.name} está sem goleiro.`);
+  const pressure = pressureFor({ matchInput, ledger, period, clockMs, phase: "danger", team });
+  const takerFatigue = fatigue.value(carrier);
+  const deliveryBreakdown = calculateSetPieceDeliveryProbability({
+    taker: carrier,
+    marker: defender,
+    kind,
+    takerFatigue,
+    pressure,
+    familiarity: familiarityFor(team, carrier),
+  });
+  const deliveryChance = rng.chance(deliveryBreakdown.probability, `p${period}.${possessionIndex}.${kind}.delivery`);
+  fatigue.exert(carrier, 0.55);
+  const delivery = ledger.append({
+    clockMs,
+    period,
+    type: kind,
+    teamId: team.id,
+    actorId: carrier.id,
+    targetId: target.id,
+    opponentIds: [defender.id, goalkeeper.id],
+    phase: "danger",
+    origin: kind === "corner" ? Object.freeze({ x: 100, y: laneFor(carrier) < 50 ? 0 : 100 }) : pointFor(carrier, "creation"),
+    destination: pointFor(target, "danger"),
+    outcome: deliveryChance.success ? "delivered" : "overhit",
+    tags: ["set_piece", kind, deliveryChance.success ? "delivered" : "turnover"],
+    causes: [input.causeEventId],
+    rngTraceId: deliveryChance.traceId,
+    audit: {
+      probability: deliveryChance.probability,
+      roll: deliveryChance.roll,
+      components: auditComponents(deliveryBreakdown),
+      details: {
+        action: kind,
+        fatigue: Number(takerFatigue.toFixed(2)),
+        pressure,
+        ...tacticalDetails(team, carrier),
+      },
+    },
+  });
+  if (!deliveryChance.success) return Object.freeze({ terminalEvent: delivery, goalTeamId: null });
+
+  clockMs += 350;
+  const goalkeeperFatigue = fatigue.value(goalkeeper);
+  const goalkeeperBreakdown = calculateGoalkeeperCrossProbability({
+    goalkeeper,
+    crosser: carrier,
+    target,
+    goalkeeperFatigue,
+    crosserFatigue: takerFatigue,
+    pressure,
+    goalkeeperFamiliarity: familiarityFor(opponent, goalkeeper),
+    crosserFamiliarity: familiarityFor(team, carrier),
+  });
+  const goalkeeperChance = rng.chance(goalkeeperBreakdown.probability, `p${period}.${possessionIndex}.${kind}.goalkeeper`);
+  if (goalkeeperChance.success) {
+    fatigue.exert(goalkeeper, 0.65);
+    const action = rng.weightedPick(
+      ["goalkeeper_claim", "goalkeeper_punch"] as const,
+      (candidate) => candidate === "goalkeeper_claim"
+        ? goalkeeper.attributes.handling + goalkeeper.attributes.composure * 0.3
+        : goalkeeper.attributes.punching + goalkeeper.attributes.bravery * 0.25,
+      `p${period}.${possessionIndex}.${kind}.goalkeeper_action`,
+    ).item;
+    const intervention = ledger.append({
+      clockMs,
+      period,
+      type: action,
+      teamId: opponent.id,
+      actorId: goalkeeper.id,
+      targetId: target.id,
+      opponentIds: [target.id],
+      phase: "danger",
+      outcome: action === "goalkeeper_claim" ? "claimed" : "punched_clear",
+      tags: ["goalkeeper_intervention", "set_piece", kind],
+      causes: [delivery.eventId],
+      rngTraceId: goalkeeperChance.traceId,
+      audit: {
+        probability: goalkeeperChance.probability,
+        roll: goalkeeperChance.roll,
+        components: auditComponents(goalkeeperBreakdown),
+      },
+    });
+    return Object.freeze({ terminalEvent: intervention, goalTeamId: null });
+  }
+
+  const attackerFatigue = fatigue.value(target);
+  const defenderFatigue = fatigue.value(defender);
+  const aerialBreakdown = calculateAerialDuelProbability({
+    attacker: target,
+    defender,
+    attackerFatigue,
+    defenderFatigue,
+    pressure,
+    attackerFamiliarity: familiarityFor(team, target),
+    defenderFamiliarity: familiarityFor(opponent, defender),
+  });
+  const aerialChance = rng.chance(aerialBreakdown.probability, `p${period}.${possessionIndex}.${kind}.aerial`);
+  fatigue.exert(target, 0.9);
+  fatigue.exert(defender, 0.9);
+  clockMs += 400;
+  const winner = aerialChance.success ? target : defender;
+  const loser = aerialChance.success ? defender : target;
+  const duel = ledger.append({
+    clockMs,
+    period,
+    type: "aerial_duel",
+    teamId: aerialChance.success ? team.id : opponent.id,
+    actorId: winner.id,
+    targetId: loser.id,
+    opponentIds: [loser.id],
+    phase: "danger",
+    outcome: aerialChance.success ? "attacker_won" : "defender_won",
+    tags: ["aerial", "set_piece", kind, aerialChance.success ? "chance_created" : "cleared"],
+    causes: [delivery.eventId],
+    rngTraceId: aerialChance.traceId,
+    audit: {
+      probability: aerialChance.probability,
+      roll: aerialChance.roll,
+      components: auditComponents(aerialBreakdown),
+    },
+  });
+  if (!aerialChance.success) return Object.freeze({ terminalEvent: duel, goalTeamId: null });
+  return resolveShot({
+    ...input,
+    clockMs,
+    causeEventId: duel.eventId,
+    carrier: target,
+    marker: defender,
+  }, "header", kind === "corner" ? 10 : 8);
+}
+
+function resolvePenalty(input: ResolutionContext): PossessionResolution {
+  const { ledger, rng, team, opponent, period, possessionIndex } = input;
+  const taker = pickSetPieceTaker(team, "penalty", rng, `p${period}.${possessionIndex}.penalty.taker`);
+  const marker = pickDefender(opponent, "danger", rng, `p${period}.${possessionIndex}.penalty.marker`);
+  const clockMs = input.clockMs + 400;
+  const penalty = ledger.append({
+    clockMs,
+    period,
+    type: "penalty_kick",
+    teamId: team.id,
+    actorId: taker.id,
+    targetId: opponent.players.find((player) => player.position === "GK")?.id,
+    opponentIds: [marker.id],
+    phase: "danger",
+    origin: Object.freeze({ x: 89, y: 50 }),
+    destination: Object.freeze({ x: 100, y: 50 }),
+    outcome: "taken",
+    tags: ["set_piece", "penalty"],
+    causes: [input.causeEventId],
+  });
+  return resolveShot({
+    ...input,
+    carrier: taker,
+    marker,
+    clockMs,
+    causeEventId: penalty.eventId,
+  }, "penalty", 18);
+}
+
+function resolveFreeKick(input: ResolutionContext, phase: PossessionPhase): PossessionResolution {
+  const { ledger, rng, team, opponent, period, possessionIndex } = input;
+  const taker = pickSetPieceTaker(team, "free_kick", rng, `p${period}.${possessionIndex}.free_kick.taker`);
+  const marker = pickDefender(opponent, phase, rng, `p${period}.${possessionIndex}.free_kick.marker`);
+  if (phase === "buildup" || phase === "progression") {
+    const restart = ledger.append({
+      clockMs: input.clockMs + 300,
+      period,
+      type: "free_kick",
+      teamId: team.id,
+      actorId: taker.id,
+      opponentIds: [marker.id],
+      phase: "restart",
+      origin: pointFor(taker, phase),
+      outcome: "short_restart",
+      tags: ["set_piece", "free_kick", "retained_possession"],
+      causes: [input.causeEventId],
+    });
+    return Object.freeze({ terminalEvent: restart, goalTeamId: null });
+  }
+
+  const directProbability = phase === "danger"
+    ? 0.7
+    : Math.min(0.58, 0.2 + taker.attributes.freeKick / 240 + taker.attributes.longShots / 520);
+  const direct = rng.chance(directProbability, `p${period}.${possessionIndex}.free_kick.choice`);
+  if (!direct.success) {
+    return resolveSetPieceDelivery({ ...input, carrier: taker, marker }, "free_kick");
+  }
+  const clockMs = input.clockMs + 350;
+  const freeKick = ledger.append({
+    clockMs,
+    period,
+    type: "free_kick",
+    teamId: team.id,
+    actorId: taker.id,
+    targetId: opponent.players.find((player) => player.position === "GK")?.id,
+    opponentIds: [marker.id],
+    phase: "danger",
+    origin: pointFor(taker, phase),
+    destination: Object.freeze({ x: 100, y: 50 }),
+    outcome: "direct",
+    tags: ["set_piece", "free_kick", "direct"],
+    causes: [input.causeEventId],
+    rngTraceId: direct.traceId,
+    audit: { probability: direct.probability, roll: direct.roll },
+  });
+  return resolveShot({
+    ...input,
+    carrier: taker,
+    marker,
+    clockMs,
+    causeEventId: freeKick.eventId,
+  }, "free_kick", phase === "danger" ? 8 : 2);
+}
+
+function resolveCommittedFoul(input: ResolutionContext & Readonly<{
+  victim: MatchPlayer;
+  offender: MatchPlayer;
+  phase: PossessionPhase;
+  foulBreakdown: RuleProbabilityBreakdown;
+  foulTrace: Readonly<{ probability: number; roll: number; traceId: string }>;
+  contestedDribble: boolean;
+}>): PossessionResolution {
+  const {
+    matchInput, ledger, rng, fatigue, team, opponent, period, possessionIndex,
+    victim, offender, phase, foulBreakdown, foulTrace,
+  } = input;
+  let clockMs = input.clockMs + 250;
+  const pressure = pressureFor({ matchInput, ledger, period, clockMs, phase, team });
+  const foul = ledger.append({
+    clockMs,
+    period,
+    type: "foul",
+    teamId: opponent.id,
+    actorId: offender.id,
+    targetId: victim.id,
+    opponentIds: [victim.id],
+    phase,
+    origin: pointFor(victim, phase),
+    outcome: "called",
+    tags: ["foul", phase, input.contestedDribble ? "challenge" : "pressing_contact"],
+    causes: [input.causeEventId],
+    rngTraceId: foulTrace.traceId,
+    audit: {
+      probability: foulTrace.probability,
+      roll: foulTrace.roll,
+      components: auditComponents(foulBreakdown),
+      details: {
+        action: "foul",
+        pressure,
+        offenderFatigue: Number(fatigue.value(offender).toFixed(2)),
+        ...tacticalDetails(opponent, offender),
+      },
+    },
+  });
+
+  const sanctions = calculateSanctionProbabilities({
+    defender: offender,
+    phase,
+    referee: matchInput.context.referee,
+    defenderFatigue: fatigue.value(offender),
+    pressure,
+    deniedGoalOpportunity: phase === "danger" && input.contestedDribble,
+  });
+  const sanctionRoll = rng.next(`p${period}.${possessionIndex}.foul.sanction`);
+  let latestCause = foul;
+  const straightRed = sanctionRoll.value < sanctions.straightRed;
+  const yellow = !straightRed && sanctionRoll.value < sanctions.straightRed + sanctions.yellow;
+  const defendingRuntime = runtimeFor(input.runtimes, opponent.id);
+  if (straightRed) {
+    input.discipline.sendOff(offender.id);
+    defendingRuntime.dismissPlayer(offender.id, clockMs + 180);
+    latestCause = ledger.append({
+      clockMs: clockMs + 180,
+      period,
+      type: "red_card",
+      teamId: opponent.id,
+      actorId: offender.id,
+      targetId: victim.id,
+      opponentIds: [victim.id],
+      phase,
+      outcome: "straight_red",
+      tags: ["discipline", "dismissal", "straight_red"],
+      causes: [foul.eventId],
+      rngTraceId: sanctionRoll.traceId,
+      audit: {
+        probability: sanctions.straightRed,
+        roll: sanctionRoll.value,
+        details: { severity: Number(sanctions.severity.toFixed(2)) },
+      },
+    });
+    clockMs = latestCause.clockMs;
+  } else if (yellow) {
+    const yellowTotal = input.discipline.issueYellow(offender.id);
+    const card = ledger.append({
+      clockMs: clockMs + 160,
+      period,
+      type: "yellow_card",
+      teamId: opponent.id,
+      actorId: offender.id,
+      targetId: victim.id,
+      opponentIds: [victim.id],
+      phase,
+      outcome: yellowTotal >= 2 ? "second_yellow" : "booked",
+      tags: ["discipline", yellowTotal >= 2 ? "second_yellow" : "yellow"],
+      causes: [foul.eventId],
+      rngTraceId: sanctionRoll.traceId,
+      audit: {
+        probability: sanctions.yellow,
+        roll: sanctionRoll.value,
+        details: { severity: Number(sanctions.severity.toFixed(2)), yellowTotal },
+      },
+    });
+    latestCause = card;
+    clockMs = card.clockMs;
+    if (yellowTotal >= 2 && matchInput.context.rules.secondYellowDismissal) {
+      input.discipline.sendOff(offender.id);
+      defendingRuntime.dismissPlayer(offender.id, clockMs + 140);
+      latestCause = ledger.append({
+        clockMs: clockMs + 140,
+        period,
+        type: "red_card",
+        teamId: opponent.id,
+        actorId: offender.id,
+        targetId: victim.id,
+        opponentIds: [victim.id],
+        phase,
+        outcome: "second_yellow",
+        tags: ["discipline", "dismissal", "second_yellow"],
+        causes: [card.eventId],
+      });
+      clockMs = latestCause.clockMs;
+    }
+  }
+
+  if (phase === "danger" && input.contestedDribble) {
+    const penaltyProbability = calculatePenaltyAwardProbability({
+      offender,
+      referee: matchInput.context.referee,
+      pressure,
+    });
+    const penalty = rng.chance(penaltyProbability, `p${period}.${possessionIndex}.foul.penalty`);
+    if (penalty.success) {
+      return resolvePenalty({
+        ...input,
+        team: runtimeFor(input.runtimes, team.id).snapshot(),
+        opponent: defendingRuntime.snapshot(),
+        clockMs,
+        causeEventId: latestCause.eventId,
+      });
+    }
+  }
+  return resolveFreeKick({
+    ...input,
+    team: runtimeFor(input.runtimes, team.id).snapshot(),
+    opponent: defendingRuntime.snapshot(),
+    clockMs,
+    causeEventId: latestCause.eventId,
+  }, phase);
+}
+
+function tryResolveFoul(input: ResolutionContext & Readonly<{
+  victim: MatchPlayer;
+  offender: MatchPlayer;
+  phase: PossessionPhase;
+  contestedDribble: boolean;
+}>): PossessionResolution | null {
+  const pressure = pressureFor({
+    matchInput: input.matchInput,
+    ledger: input.ledger,
+    period: input.period,
+    clockMs: input.clockMs,
+    phase: input.phase,
+    team: input.team,
+  });
+  const breakdown = calculateFoulProbability({
+    defender: input.offender,
+    victim: input.victim,
+    defendingTeam: input.opponent,
+    context: input.matchInput.context,
+    phase: input.phase,
+    defenderFatigue: input.fatigue.value(input.offender),
+    pressure,
+    contestedDribble: input.contestedDribble,
+  });
+  const chance = input.rng.chance(
+    breakdown.probability,
+    `p${input.period}.${input.possessionIndex}.${input.phase}.foul`,
+  );
+  if (!chance.success) return null;
+  return resolveCommittedFoul({
+    ...input,
+    foulBreakdown: breakdown,
+    foulTrace: chance,
+  });
+}
+
+function resolveRebound(
+  input: ResolutionContext,
+  save: CanonicalMatchEvent,
+  shooter: MatchPlayer,
+  goalkeeper: MatchPlayer,
+): PossessionResolution {
+  const { ledger, rng, fatigue, team, opponent, period, possessionIndex } = input;
+  const attacker = pickReboundAttacker(team, shooter, rng, `p${period}.${possessionIndex}.rebound.attacker`);
+  const defender = pickAerialDefender(opponent, rng, `p${period}.${possessionIndex}.rebound.defender`);
+  const breakdown = calculateReboundProbability({
+    attacker,
+    defender,
+    goalkeeper,
+    attackerFatigue: fatigue.value(attacker),
+    defenderFatigue: fatigue.value(defender),
+  });
+  const chance = rng.chance(breakdown.probability, `p${period}.${possessionIndex}.rebound.recovery`);
+  fatigue.exert(attacker, 0.65);
+  fatigue.exert(defender, 0.55);
+  const winner = chance.success ? attacker : defender;
+  const loser = chance.success ? defender : attacker;
+  const rebound = ledger.append({
+    clockMs: save.clockMs + 320,
+    period,
+    type: "rebound",
+    teamId: chance.success ? team.id : opponent.id,
+    actorId: winner.id,
+    targetId: loser.id,
+    opponentIds: [loser.id, goalkeeper.id],
+    phase: "danger",
+    origin: Object.freeze({ x: 94, y: 50 }),
+    outcome: chance.success ? "attacker_recovered" : "defender_cleared",
+    tags: ["second_ball", chance.success ? "chance_created" : "cleared"],
+    causes: [save.eventId],
+    rngTraceId: chance.traceId,
+    audit: {
+      probability: chance.probability,
+      roll: chance.roll,
+      components: auditComponents(breakdown),
+    },
+  });
+  if (!chance.success) return Object.freeze({ terminalEvent: rebound, goalTeamId: null });
+  return resolveShot({
+    ...input,
+    clockMs: rebound.clockMs,
+    causeEventId: rebound.eventId,
+    carrier: attacker,
+    marker: defender,
+    reboundDepth: (input.reboundDepth ?? 0) + 1,
+  }, "foot", 16);
+}
+
 function resolveShot(
   input: ResolutionContext,
   shotType: ShotType,
@@ -281,7 +797,7 @@ function resolveShot(
   } = input;
   let clockMs = input.clockMs + 500;
   const pressure = pressureFor({ matchInput, ledger, period, clockMs, phase: "danger", team });
-  const foot = shotType === "foot"
+  const foot = shotType !== "header"
     ? resolvePlayerFootUse(carrier, requestedFootFor(carrier, "shot"), true)
     : undefined;
   const shooterFatigue = fatigue.value(carrier);
@@ -303,8 +819,16 @@ function resolveShot(
     shooterFamiliarity: familiarityFor(team, carrier),
     markerFamiliarity: familiarityFor(opponent, marker),
   });
-  const onTarget = rng.chance(shotBreakdown.probability, `p${period}.${possessionIndex}.${shotType}.on_target`);
-  fatigue.exert(carrier, shotType === "header" ? 0.85 : 0.7);
+  const reboundLabel = input.reboundDepth ? `.rebound${input.reboundDepth}` : "";
+  const onTarget = rng.chance(shotBreakdown.probability, `p${period}.${possessionIndex}.${shotType}${reboundLabel}.on_target`);
+  const missFraction = !onTarget.success
+    ? (onTarget.roll - onTarget.probability) / Math.max(0.0001, 1 - onTarget.probability)
+    : 1;
+  const deflectedOut = !onTarget.success
+    && shotType !== "penalty"
+    && (input.restartDepth ?? 0) < 1
+    && missFraction < 0.17;
+  fatigue.exert(carrier, shotType === "header" ? 0.85 : shotType === "penalty" ? 0.35 : 0.7);
   fatigue.exert(marker, 0.35);
   const shot = ledger.append({
     clockMs,
@@ -317,10 +841,13 @@ function resolveShot(
     phase: "danger",
     origin: pointFor(carrier, "danger"),
     destination: Object.freeze({ x: 100, y: 50 }),
-    outcome: onTarget.success ? "on_target" : "off_target",
+    outcome: onTarget.success ? "on_target" : deflectedOut ? "deflected_out" : "off_target",
     tags: [
       "dangerous_attack",
       shotType,
+      ...(shotType === "free_kick" || shotType === "penalty" ? ["set_piece"] : []),
+      ...(input.reboundDepth ? ["rebound_shot"] : []),
+      ...(deflectedOut ? ["corner_awarded"] : []),
       `role:${assignmentFor(team, carrier.id).role}`,
       ...relevantActionTraits(carrier, "shot").map((trait) => `trait:${trait}`),
       ...(foot ? footTags(foot) : []),
@@ -332,7 +859,7 @@ function resolveShot(
       roll: onTarget.roll,
       components: auditComponents(shotBreakdown),
       details: {
-        action: shotType === "header" ? "header" : "shot",
+        action: shotType === "header" ? "header" : shotType,
         fatigue: Number(shooterFatigue.toFixed(2)),
         pressure,
         chanceQuality,
@@ -341,7 +868,19 @@ function resolveShot(
       },
     },
   });
-  if (!onTarget.success) return Object.freeze({ terminalEvent: shot, goalTeamId: null });
+  if (!onTarget.success) {
+    if (deflectedOut) {
+      const taker = pickSetPieceTaker(team, "corner", rng, `p${period}.${possessionIndex}.corner_after_shot.taker`);
+      return resolveSetPieceDelivery({
+        ...input,
+        clockMs,
+        causeEventId: shot.eventId,
+        carrier: taker,
+        restartDepth: (input.restartDepth ?? 0) + 1,
+      }, "corner");
+    }
+    return Object.freeze({ terminalEvent: shot, goalTeamId: null });
+  }
 
   clockMs += 650;
   const goalBreakdown = calculateGoalProbability({
@@ -357,7 +896,7 @@ function resolveShot(
     shooterFamiliarity: familiarityFor(team, carrier),
     goalkeeperFamiliarity: familiarityFor(opponent, goalkeeper),
   });
-  const goalChance = rng.chance(goalBreakdown.probability, `p${period}.${possessionIndex}.${shotType}.goal`);
+  const goalChance = rng.chance(goalBreakdown.probability, `p${period}.${possessionIndex}.${shotType}${reboundLabel}.goal`);
   fatigue.exert(goalkeeper, 0.55);
   if (goalChance.success) {
     const goal = ledger.append({
@@ -379,7 +918,7 @@ function resolveShot(
         roll: goalChance.roll,
         components: auditComponents(goalBreakdown),
         details: {
-          action: shotType === "header" ? "headed_goal" : "goal",
+          action: shotType === "header" ? "headed_goal" : shotType === "foot" ? "goal" : `${shotType}_goal`,
           fatigue: Number(shooterFatigue.toFixed(2)),
           goalkeeperFatigue: Number(goalkeeperFatigue.toFixed(2)),
           pressure,
@@ -396,7 +935,7 @@ function resolveShot(
     (style) => style === "caught"
       ? goalkeeper.attributes.handling + goalkeeper.attributes.composure * 0.35
       : 45 + goalkeeper.attributes.reflexes * 0.45,
-    `p${period}.${possessionIndex}.${shotType}.save_style`,
+    `p${period}.${possessionIndex}.${shotType}${reboundLabel}.save_style`,
   ).item;
   const save = ledger.append({
     clockMs,
@@ -425,6 +964,24 @@ function resolveShot(
       },
     },
   });
+  if (saveStyle === "parried") {
+    if ((input.reboundDepth ?? 0) < 1) return resolveRebound(input, save, carrier, goalkeeper);
+    const secured = ledger.append({
+      clockMs: save.clockMs + 260,
+      period,
+      type: "rebound",
+      teamId: opponent.id,
+      actorId: goalkeeper.id,
+      targetId: carrier.id,
+      opponentIds: [carrier.id],
+      phase: "danger",
+      origin: Object.freeze({ x: 98, y: 50 }),
+      outcome: "goalkeeper_recovered",
+      tags: ["second_ball", "secured", "rebound_limit"],
+      causes: [save.eventId],
+    });
+    return Object.freeze({ terminalEvent: secured, goalTeamId: null });
+  }
   return Object.freeze({ terminalEvent: save, goalTeamId: null });
 }
 
@@ -483,6 +1040,16 @@ function resolveDribble(input: ResolutionContext) {
   });
   fatigue.exert(carrier, 1.05);
   fatigue.exert(marker, 0.85);
+  const foulResolution = tryResolveFoul({
+    ...input,
+    clockMs,
+    causeEventId: attempt.eventId,
+    victim: carrier,
+    offender: marker,
+    phase: "danger",
+    contestedDribble: true,
+  });
+  if (foulResolution) return foulResolution;
   clockMs += 350;
   const tackle = ledger.append({
     clockMs,
@@ -592,6 +1159,8 @@ function resolveCross(input: ResolutionContext) {
   fatigue.exert(input.marker, 0.4);
   clockMs += 350;
   if (!crossChance.success) {
+    const missRoll = (crossChance.roll - crossChance.probability) / Math.max(0.0001, 1 - crossChance.probability);
+    const blockedOut = missRoll < 0.55;
     const failed = ledger.append({
       clockMs,
       period,
@@ -601,11 +1170,21 @@ function resolveCross(input: ResolutionContext) {
       targetId: target.id,
       opponentIds: [input.marker.id],
       phase: "danger",
-      outcome: "blocked",
-      tags: ["wide_attack", "turnover", ...footTags(foot)],
+      outcome: blockedOut ? "blocked_out" : "blocked",
+      tags: ["wide_attack", "turnover", ...(blockedOut ? ["corner_awarded"] : []), ...footTags(foot)],
       causes: [attempt.eventId],
       rngTraceId: crossChance.traceId,
     });
+    if (blockedOut) {
+      const taker = pickSetPieceTaker(team, "corner", rng, `p${period}.${possessionIndex}.corner.taker`);
+      return resolveSetPieceDelivery({
+        ...input,
+        clockMs,
+        causeEventId: failed.eventId,
+        carrier: taker,
+        marker: defender,
+      }, "corner");
+    }
     return Object.freeze({ terminalEvent: failed, goalTeamId: null });
   }
 
@@ -746,8 +1325,11 @@ function simulatePossession(input: {
   clockMs: number;
   causeEventId: string;
   possessionIndex: number;
+  discipline: DisciplineTracker;
+  runtimes: ReadonlyMap<string, TeamMatchRuntime>;
+  stoppage?: boolean;
 }) {
-  const { matchInput, ledger, rng, fatigue, team, opponent, period, possessionIndex } = input;
+  const { matchInput, ledger, rng, fatigue, team, opponent, period, possessionIndex, discipline, runtimes } = input;
   const transitionLoad = team.tactics.transitionStyle === "counter" ? 0.035 : team.tactics.transitionStyle === "hold" ? -0.015 : 0;
   fatigue.exertMany(team.players, 0.12 + team.tactics.tempo / 1_100 + transitionLoad);
   fatigue.exertMany(opponent.players, 0.09 + opponent.tactics.pressingIntensity / 950);
@@ -767,7 +1349,7 @@ function simulatePossession(input: {
     phase: "restart",
     origin: pointFor(carrier, "restart"),
     outcome: "controlled",
-    tags: ["possession"],
+    tags: ["possession", ...(input.stoppage ? ["stoppage_time"] : [])],
     causes: [input.causeEventId],
   });
   let causeEventId = possession.eventId;
@@ -776,6 +1358,27 @@ function simulatePossession(input: {
     clockMs += 650;
     const receiver = pickReceiver(team, carrier, phase, rng, `p${period}.${possessionIndex}.${phase}.receiver`);
     const defender = pickDefender(opponent, phase, rng, `p${period}.${possessionIndex}.${phase}.defender`);
+    const foulResolution = tryResolveFoul({
+      matchInput,
+      ledger,
+      rng,
+      fatigue,
+      team,
+      opponent,
+      period,
+      clockMs,
+      causeEventId,
+      possessionIndex,
+      carrier,
+      marker: defender,
+      discipline,
+      runtimes,
+      victim: carrier,
+      offender: defender,
+      phase,
+      contestedDribble: false,
+    });
+    if (foulResolution) return foulResolution;
     const pressure = pressureFor({ matchInput, ledger, period, clockMs, phase, team });
     const foot = resolvePlayerFootUse(carrier);
     const passerFatigue = fatigue.value(carrier);
@@ -867,6 +1470,48 @@ function simulatePossession(input: {
       return Object.freeze({ terminalEvent: interception, goalTeamId: null });
     }
 
+    if (matchInput.context.rules.offsideEnabled && (phase === "progression" || phase === "creation")) {
+      const offsideBreakdown = calculateOffsideProbability({
+        attackingTeam: team,
+        defendingTeam: opponent,
+        passer: carrier,
+        receiver,
+        defender,
+        phase,
+      });
+      const offsideChance = rng.chance(
+        offsideBreakdown.probability,
+        `p${period}.${possessionIndex}.${phase}.offside`,
+      );
+      if (offsideChance.success) {
+        const offside = ledger.append({
+          clockMs,
+          period,
+          type: "offside",
+          teamId: team.id,
+          actorId: receiver.id,
+          targetId: carrier.id,
+          opponentIds: [defender.id],
+          phase,
+          origin: pointFor(receiver, phase),
+          outcome: "called",
+          tags: ["offside", "turnover", phase],
+          causes: [attempt.eventId],
+          rngTraceId: offsideChance.traceId,
+          audit: {
+            probability: offsideChance.probability,
+            roll: offsideChance.roll,
+            components: auditComponents(offsideBreakdown),
+            details: {
+              receiverRole: assignmentFor(team, receiver.id).role,
+              defensiveLine: opponent.tactics.defensiveLine,
+            },
+          },
+        });
+        return Object.freeze({ terminalEvent: offside, goalTeamId: null });
+      }
+    }
+
     const completed = ledger.append({
       clockMs,
       period,
@@ -902,6 +1547,8 @@ function simulatePossession(input: {
     possessionIndex,
     carrier,
     marker,
+    discipline,
+    runtimes,
   };
   if (action === "cross") return resolveCross(resolution);
   if (action === "dribble") return resolveDribble(resolution);
@@ -913,6 +1560,7 @@ function buildResult(
   ledger: EventLedger,
   rng: SeededRng,
   fatigue: FatigueTracker,
+  discipline: DisciplineTracker,
   homeRuntime: TeamMatchRuntime,
   awayRuntime: TeamMatchRuntime,
 ): MatchResult {
@@ -926,8 +1574,8 @@ function buildResult(
     score: ledger.score(),
     possessionTeamId: null,
     players: Object.freeze([
-      ...homeRuntime.states(fatigue),
-      ...awayRuntime.states(fatigue),
+      ...homeRuntime.states(fatigue, discipline),
+      ...awayRuntime.states(fatigue, discipline),
     ]),
   });
   return Object.freeze({
@@ -947,6 +1595,7 @@ export function simulateEmptyMatch(input: MatchInput): MatchResult {
   const homeRuntime = new TeamMatchRuntime(input.home);
   const awayRuntime = new TeamMatchRuntime(input.away);
   const fatigue = new FatigueTracker([...homeRuntime.allPlayers(), ...awayRuntime.allPlayers()]);
+  const discipline = new DisciplineTracker([...homeRuntime.allPlayers(), ...awayRuntime.allPlayers()]);
   const firstKickoff = ledger.append({
     clockMs: 0,
     period: 1,
@@ -988,7 +1637,7 @@ export function simulateEmptyMatch(input: MatchInput): MatchResult {
     outcome: "finished",
     causes: [secondEnd.eventId],
   });
-  return buildResult(input, ledger, rng, fatigue, homeRuntime, awayRuntime);
+  return buildResult(input, ledger, rng, fatigue, discipline, homeRuntime, awayRuntime);
 }
 
 function interventionPeriod(clockMs: number): MatchPeriod {
@@ -1004,6 +1653,20 @@ function applyIntervention(input: {
   const { intervention, ledger, runtime, previousEvent } = input;
   const clockMs = Math.max(intervention.clockMs, previousEvent.clockMs);
   if (intervention.type === "substitution") {
+    if (!runtime.isActive(intervention.playerOutId)) {
+      return ledger.append({
+        clockMs,
+        period: interventionPeriod(clockMs),
+        type: "substitution",
+        teamId: intervention.teamId,
+        actorId: intervention.playerOutId,
+        targetId: intervention.playerInId,
+        outcome: "cancelled_player_unavailable",
+        tags: ["coach_intervention", "cancelled", "player_unavailable"],
+        causes: [previousEvent.eventId],
+        audit: { details: { interventionId: intervention.id, scheduledClockMs: intervention.clockMs } },
+      });
+    }
     const outgoingAssignment = runtime.assignment(intervention.playerOutId);
     runtime.applySubstitution({ ...intervention, clockMs });
     return ledger.append({
@@ -1064,6 +1727,7 @@ export function simulateMatch(input: MatchInput): MatchResult {
     [awayRuntime.id, awayRuntime],
   ]);
   const fatigue = new FatigueTracker([...homeRuntime.allPlayers(), ...awayRuntime.allPlayers()]);
+  const discipline = new DisciplineTracker([...homeRuntime.allPlayers(), ...awayRuntime.allPlayers()]);
   const interventions = [...input.interventions].map((intervention, index) => ({ intervention, index }))
     .sort((left, right) => left.intervention.clockMs - right.intervention.clockMs || left.index - right.index);
   let nextIntervention = 0;
@@ -1089,6 +1753,7 @@ export function simulateMatch(input: MatchInput): MatchResult {
 
   for (const period of [1, 2] as const) {
     const periodStart = (period - 1) * PERIOD_DURATION_MS;
+    const periodEventStart = ledger.events().length;
     const kickoffTeamId = period === 1 ? input.home.id : input.away.id;
     const kickoff = ledger.append({
       clockMs: periodStart,
@@ -1140,6 +1805,8 @@ export function simulateMatch(input: MatchInput): MatchResult {
           : possessionClock,
         causeEventId: previousEvent.eventId,
         possessionIndex: index,
+        discipline,
+        runtimes,
       });
       previousEvent = result.terminalEvent;
       forcedPossessionTeamId = result.goalTeamId
@@ -1149,6 +1816,90 @@ export function simulateMatch(input: MatchInput): MatchResult {
     }
 
     previousEvent = applyDueInterventions(periodStart + PERIOD_DURATION_MS, false, previousEvent);
+    if (input.context.rules.stoppageTimeEnabled) {
+      const periodEvents = ledger.events().slice(periodEventStart);
+      const goals = periodEvents.filter((event) => event.type === "goal").length;
+      const fouls = periodEvents.filter((event) => event.type === "foul").length;
+      const cards = periodEvents.filter((event) => event.type === "yellow_card" || event.type === "red_card").length;
+      const substitutions = periodEvents.filter((event) => event.type === "substitution" && event.outcome === "completed").length;
+      const stoppageTrace = rng.next(`p${period}.stoppage_time`);
+      const addedSeconds = calculateStoppageSeconds({
+        period,
+        goals,
+        fouls,
+        cards,
+        substitutions,
+        referee: input.context.referee,
+        randomValue: stoppageTrace.value,
+      });
+      previousEvent = ledger.append({
+        clockMs: previousEvent.clockMs,
+        period,
+        type: "stoppage_time",
+        teamId: null,
+        phase: "restart",
+        outcome: "announced",
+        tags: ["stoppage_time", period === 1 ? "first_half" : "second_half"],
+        causes: [previousEvent.eventId],
+        rngTraceId: stoppageTrace.traceId,
+        audit: {
+          details: {
+            addedSeconds,
+            addedMinutes: Number((addedSeconds / 60).toFixed(2)),
+            goals,
+            fouls,
+            cards,
+            substitutions,
+          },
+        },
+      });
+
+      const requestedExtraPossessions = Math.max(1, Math.min(4, Math.round(addedSeconds / 110)));
+      for (let extraIndex = 0; extraIndex < requestedExtraPossessions; extraIndex += 1) {
+        const periodEndClock = periodStart + PERIOD_DURATION_MS;
+        if (periodEndClock - previousEvent.clockMs < 8_500) break;
+        const possessionClock = previousEvent.clockMs + 120;
+        const currentHome = homeRuntime.snapshot();
+        const currentAway = awayRuntime.snapshot();
+        const possessionTeam = forcedPossessionTeamId
+          ? forcedPossessionTeamId === currentHome.id ? currentHome : currentAway
+          : selectPossessionTeam(input, currentHome, currentAway, rng, `p${period}.stoppage.${extraIndex}.possession_team`);
+        const opponent = possessionTeam.id === currentHome.id ? currentAway : currentHome;
+        if (restartAfterGoal) {
+          previousEvent = ledger.append({
+            clockMs: possessionClock,
+            period,
+            type: "kickoff",
+            teamId: possessionTeam.id,
+            phase: "restart",
+            outcome: "restarted_after_goal",
+            tags: ["restart_after_goal", "stoppage_time"],
+            causes: [previousEvent.eventId],
+          });
+          restartAfterGoal = false;
+        }
+        const result = simulatePossession({
+          matchInput: input,
+          ledger,
+          rng,
+          fatigue,
+          team: possessionTeam,
+          opponent,
+          period,
+          clockMs: previousEvent.type === "kickoff" ? previousEvent.clockMs + 120 : possessionClock,
+          causeEventId: previousEvent.eventId,
+          possessionIndex: input.context.possessionsPerPeriod + extraIndex,
+          discipline,
+          runtimes,
+          stoppage: true,
+        });
+        previousEvent = result.terminalEvent;
+        forcedPossessionTeamId = result.goalTeamId
+          ? result.goalTeamId === input.home.id ? input.away.id : input.home.id
+          : null;
+        restartAfterGoal = Boolean(result.goalTeamId);
+      }
+    }
     previousEvent = ledger.append({
       clockMs: periodStart + PERIOD_DURATION_MS,
       period,
@@ -1168,5 +1919,5 @@ export function simulateMatch(input: MatchInput): MatchResult {
     outcome: "finished",
     causes: [previousEvent.eventId],
   });
-  return buildResult(input, ledger, rng, fatigue, homeRuntime, awayRuntime);
+  return buildResult(input, ledger, rng, fatigue, discipline, homeRuntime, awayRuntime);
 }

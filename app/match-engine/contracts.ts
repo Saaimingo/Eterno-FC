@@ -1,4 +1,4 @@
-export const MATCH_ENGINE_VERSION = "0.3.0-mp3";
+export const MATCH_ENGINE_VERSION = "0.4.0-mp4";
 
 export const TECHNICAL_ATTRIBUTE_KEYS = [
   "corners",
@@ -232,6 +232,20 @@ export type TacticalChangeIntervention = Readonly<{
 
 export type MatchIntervention = SubstitutionIntervention | TacticalChangeIntervention;
 
+export type MatchRules = Readonly<{
+  maxSubstitutions: number;
+  secondYellowDismissal: boolean;
+  offsideEnabled: boolean;
+  stoppageTimeEnabled: boolean;
+}>;
+
+export type RefereeProfile = Readonly<{
+  strictness: number;
+  cardTendency: number;
+  penaltyTendency: number;
+  stoppageTendency: number;
+}>;
+
 export type MatchContext = Readonly<{
   matchId: string;
   competitionId: string;
@@ -239,6 +253,8 @@ export type MatchContext = Readonly<{
   homeAdvantage: number;
   possessionsPerPeriod: number;
   importance: number;
+  rules: MatchRules;
+  referee: RefereeProfile;
 }>;
 
 export type MatchInput = Readonly<{
@@ -274,11 +290,20 @@ export const MATCH_EVENT_TYPES = [
   "goalkeeper_claim",
   "goalkeeper_punch",
   "aerial_duel",
+  "foul",
+  "yellow_card",
+  "red_card",
+  "offside",
+  "free_kick",
+  "corner",
+  "penalty_kick",
   "shot",
   "save",
+  "rebound",
   "goal",
   "substitution",
   "tactical_change",
+  "stoppage_time",
   "period_end",
   "match_end",
 ] as const;
@@ -327,7 +352,8 @@ export type RngTrace = Readonly<{
 export type PlayerMatchState = Readonly<{
   playerId: string;
   fatigue: number;
-  status: "active" | "substituted" | "bench";
+  status: "active" | "substituted" | "sent_off" | "bench";
+  yellowCards: number;
   position: MatchPosition;
   role: PlayerRole;
   enteredAtMs?: number;
@@ -365,6 +391,16 @@ export type TeamStatistics = Readonly<{
   shotsOnTarget: number;
   headedShots: number;
   saves: number;
+  foulsCommitted: number;
+  foulsSuffered: number;
+  yellowCards: number;
+  redCards: number;
+  offsides: number;
+  freeKicks: number;
+  corners: number;
+  penalties: number;
+  rebounds: number;
+  reboundsWon: number;
   goals: number;
 }>;
 
@@ -527,7 +563,9 @@ function validateInterventions(input: MatchInput) {
 
     if (intervention.type === "substitution") {
       state.substitutions += 1;
-      if (state.substitutions > 5) throw new Error(`${team.name} excedeu cinco substituições.`);
+      if (state.substitutions > input.context.rules.maxSubstitutions) {
+        throw new Error(`${team.name} excedeu o limite de substituições.`);
+      }
       if (!state.active.has(intervention.playerOutId)) {
         throw new Error(`${intervention.playerOutId} não está em campo em ${intervention.id}.`);
       }
@@ -575,6 +613,11 @@ export function validateMatchInput(input: MatchInput) {
   assertRange(input.context.homeAdvantage, 0, 10, "Vantagem de mando");
   assertRange(input.context.possessionsPerPeriod, 1, 100, "Posses por período");
   assertRange(input.context.importance, 0, 100, "Importância da partida");
+  assertRange(input.context.rules.maxSubstitutions, 0, 12, "Limite de substituições");
+  assertRange(input.context.referee.strictness, 0, 100, "Rigor do árbitro");
+  assertRange(input.context.referee.cardTendency, 0, 100, "Tendência de cartões do árbitro");
+  assertRange(input.context.referee.penaltyTendency, 0, 100, "Tendência de pênaltis do árbitro");
+  assertRange(input.context.referee.stoppageTendency, 0, 100, "Tendência de acréscimos do árbitro");
   validateTeamSnapshot(input.home);
   validateTeamSnapshot(input.away);
 

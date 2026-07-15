@@ -272,6 +272,18 @@ export function createPrototypeMatchInput(seed: string, possessionsPerPeriod = 4
       homeAdvantage: 3,
       possessionsPerPeriod,
       importance: 55,
+      rules: Object.freeze({
+        maxSubstitutions: 5,
+        secondYellowDismissal: true,
+        offsideEnabled: true,
+        stoppageTimeEnabled: true,
+      }),
+      referee: Object.freeze({
+        strictness: 52,
+        cardTendency: 48,
+        penaltyTendency: 50,
+        stoppageTendency: 54,
+      }),
     }),
     home: createTeam("aurora", "Aurora FC", HOME_NAMES, HOME_BENCH_NAMES, 1),
     away: createTeam("ferro-azul", "Ferroviário Azul", AWAY_NAMES, AWAY_BENCH_NAMES, 0),

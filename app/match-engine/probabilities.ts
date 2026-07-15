@@ -14,7 +14,7 @@ export type ProbabilityBreakdown = Readonly<{
   context: number;
 }>;
 
-export type ShotType = "foot" | "header";
+export type ShotType = "foot" | "header" | "free_kick" | "penalty";
 
 type ExecutionContext = Readonly<{
   fatigue?: number;
@@ -307,7 +307,19 @@ export function calculateShotOnTargetProbability(input: {
       + shooter.attributes.jumpingReach * 0.13
       + shooter.attributes.bravery * 0.1
       + shooter.attributes.anticipation * 0.12
-    : shooter.attributes.finishing * 0.38
+    : shotType === "free_kick"
+      ? shooter.attributes.freeKick * 0.4
+        + shooter.attributes.longShots * 0.2
+        + shooter.attributes.technique * 0.18
+        + shooter.attributes.composure * 0.12
+        + shooter.attributes.decisions * 0.1
+      : shotType === "penalty"
+        ? shooter.attributes.penalties * 0.48
+          + shooter.attributes.composure * 0.25
+          + shooter.attributes.technique * 0.12
+          + shooter.attributes.decisions * 0.1
+          + shooter.attributes.finishing * 0.05
+        : shooter.attributes.finishing * 0.38
       + shooter.attributes.composure * 0.23
       + shooter.attributes.technique * 0.16
       + shooter.attributes.balance * 0.08
@@ -318,20 +330,26 @@ export function calculateShotOnTargetProbability(input: {
     pressure: input.pressure,
     foot: input.foot,
     familiarity: input.shooterFamiliarity,
-  }, shotType === "foot");
-  const defense = oppositionScore(marker, (
-    marker.attributes.positioning * 0.27
-    + marker.attributes.anticipation * 0.2
-    + marker.attributes.marking * 0.16
-    + marker.attributes.concentration * 0.14
-    + marker.attributes.tackling * 0.11
-    + marker.attributes.bravery * 0.07
-    + marker.attributes.balance * 0.05
-  ), input.markerFatigue, input.markerFamiliarity);
+  }, shotType !== "header");
+  const defense = shotType === "penalty"
+    ? 48
+    : oppositionScore(marker, (
+      marker.attributes.positioning * 0.27
+      + marker.attributes.anticipation * 0.2
+      + marker.attributes.marking * 0.16
+      + marker.attributes.concentration * 0.14
+      + marker.attributes.tackling * 0.11
+      + marker.attributes.bravery * 0.07
+      + marker.attributes.balance * 0.05
+    ), input.markerFatigue, input.markerFamiliarity);
   const context = mentalityModifier(tactics)
     + homeAdvantage / 600
     + (input.chanceQuality ?? 0) / 500;
-  const probability = clamp(0.46 + (attack - defense) / 205 + context, 0.12, 0.82);
+  const base = shotType === "penalty" ? 0.84 : shotType === "free_kick" ? 0.39 : 0.46;
+  const divisor = shotType === "penalty" ? 400 : shotType === "free_kick" ? 245 : 205;
+  const minimum = shotType === "penalty" ? 0.68 : shotType === "free_kick" ? 0.16 : 0.12;
+  const maximum = shotType === "penalty" ? 0.97 : shotType === "free_kick" ? 0.78 : 0.82;
+  const probability = clamp(base + (attack - defense) / divisor + context, minimum, maximum);
   return Object.freeze({ probability, attack, defense, context });
 }
 
@@ -356,7 +374,19 @@ export function calculateGoalProbability(input: {
       + shooter.attributes.technique * 0.12
       + shooter.attributes.bravery * 0.1
       + shooter.attributes.anticipation * 0.1
-    : shooter.attributes.finishing * 0.44
+    : shotType === "free_kick"
+      ? shooter.attributes.freeKick * 0.43
+        + shooter.attributes.longShots * 0.19
+        + shooter.attributes.technique * 0.17
+        + shooter.attributes.composure * 0.13
+        + shooter.attributes.decisions * 0.08
+      : shotType === "penalty"
+        ? shooter.attributes.penalties * 0.47
+          + shooter.attributes.composure * 0.28
+          + shooter.attributes.technique * 0.1
+          + shooter.attributes.decisions * 0.1
+          + shooter.attributes.finishing * 0.05
+        : shooter.attributes.finishing * 0.44
       + shooter.attributes.composure * 0.27
       + shooter.attributes.technique * 0.16
       + shooter.attributes.offBall * 0.08
@@ -366,7 +396,7 @@ export function calculateGoalProbability(input: {
     pressure: input.pressure,
     foot: input.foot,
     familiarity: input.shooterFamiliarity,
-  }, shotType === "foot");
+  }, shotType !== "header");
   const goalkeeperRaw = shotType === "header"
     ? goalkeeper.attributes.reflexes * 0.27
       + goalkeeper.attributes.aerialReach * 0.2
@@ -374,7 +404,21 @@ export function calculateGoalProbability(input: {
       + goalkeeper.attributes.positioning * 0.13
       + goalkeeper.attributes.anticipation * 0.13
       + goalkeeper.attributes.composure * 0.1
-    : goalkeeper.attributes.reflexes * 0.29
+    : shotType === "penalty"
+      ? goalkeeper.attributes.oneOnOnes * 0.29
+        + goalkeeper.attributes.reflexes * 0.23
+        + goalkeeper.attributes.anticipation * 0.16
+        + goalkeeper.attributes.composure * 0.14
+        + goalkeeper.attributes.agility * 0.1
+        + goalkeeper.attributes.handling * 0.08
+      : shotType === "free_kick"
+        ? goalkeeper.attributes.reflexes * 0.3
+          + goalkeeper.attributes.agility * 0.18
+          + goalkeeper.attributes.positioning * 0.17
+          + goalkeeper.attributes.anticipation * 0.13
+          + goalkeeper.attributes.handling * 0.12
+          + goalkeeper.attributes.composure * 0.1
+        : goalkeeper.attributes.reflexes * 0.29
       + goalkeeper.attributes.oneOnOnes * 0.22
       + goalkeeper.attributes.handling * 0.17
       + goalkeeper.attributes.positioning * 0.13
@@ -382,7 +426,11 @@ export function calculateGoalProbability(input: {
       + goalkeeper.attributes.composure * 0.08;
   const defense = oppositionScore(goalkeeper, goalkeeperRaw, input.goalkeeperFatigue, input.goalkeeperFamiliarity);
   const context = homeAdvantage / 700 + (input.chanceQuality ?? 0) / 650;
-  const probability = clamp(0.29 + (attack - defense) / 175 + context, 0.04, 0.66);
+  const base = shotType === "penalty" ? 0.72 : shotType === "free_kick" ? 0.19 : 0.29;
+  const divisor = shotType === "penalty" ? 245 : shotType === "free_kick" ? 195 : 175;
+  const minimum = shotType === "penalty" ? 0.45 : shotType === "free_kick" ? 0.025 : 0.04;
+  const maximum = shotType === "penalty" ? 0.9 : shotType === "free_kick" ? 0.48 : 0.66;
+  const probability = clamp(base + (attack - defense) / divisor + context, minimum, maximum);
   return Object.freeze({ probability, attack, defense, context });
 }
 

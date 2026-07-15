@@ -17,6 +17,7 @@
     "calibrate:match-engine": "node --import tsx scripts/calibrate-match-engine.mjs",
     "calibrate:match-engine:specialists": "node --import tsx scripts/calibrate-match-engine-specialists.mjs",
     "calibrate:match-engine:tactics": "node --import tsx scripts/calibrate-match-engine-tactics.mjs",
+    "calibrate:match-engine:rules": "node --import tsx scripts/calibrate-match-engine-rules.mjs",
     "db:generate": "bash scripts/sites-env.sh -- drizzle-kit generate"
   },
   "dependencies": {

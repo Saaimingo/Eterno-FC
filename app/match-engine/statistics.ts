@@ -30,6 +30,16 @@ function createTeamStatistics(teamId: string): MutableTeamStatistics {
     shotsOnTarget: 0,
     headedShots: 0,
     saves: 0,
+    foulsCommitted: 0,
+    foulsSuffered: 0,
+    yellowCards: 0,
+    redCards: 0,
+    offsides: 0,
+    freeKicks: 0,
+    corners: 0,
+    penalties: 0,
+    rebounds: 0,
+    reboundsWon: 0,
     goals: 0,
   };
 }
@@ -79,6 +89,22 @@ export function projectStatistics(
       if (event.tags.includes("header")) statistics.headedShots += 1;
     }
     if (event.type === "save") statistics.saves += 1;
+    if (event.type === "foul") {
+      statistics.foulsCommitted += 1;
+      const opponent = event.teamId === homeTeamId ? away : home;
+      opponent.foulsSuffered += 1;
+    }
+    if (event.type === "yellow_card") statistics.yellowCards += 1;
+    if (event.type === "red_card") statistics.redCards += 1;
+    if (event.type === "offside") statistics.offsides += 1;
+    if (event.type === "free_kick") statistics.freeKicks += 1;
+    if (event.type === "corner") statistics.corners += 1;
+    if (event.type === "penalty_kick") statistics.penalties += 1;
+    if (event.type === "rebound") {
+      home.rebounds += 1;
+      away.rebounds += 1;
+      statistics.reboundsWon += 1;
+    }
     if (event.type === "goal") statistics.goals += 1;
   }
 

@@ -1,4 +1,4 @@
-# Motor de partida vNext — MP-0 a MP-3
+# Motor de partida vNext — MP-0 a MP-4
 
 Este diretório contém o novo núcleo causal do Eterno FC. Ele roda em paralelo ao motor legado; ainda não decide as partidas da carreira do usuário.
 
@@ -29,13 +29,19 @@ Este diretório contém o novo núcleo causal do Eterno FC. Ele roda em paralelo
 - plano coletivo com mentalidade, risco, ritmo, largura, linhas, pressão, passe, foco, transição e liberdade;
 - substituições, mudanças de função, posição e plano durante a partida;
 - intervenções registradas no ledger que alteram somente acontecimentos futuros;
+- perfil de árbitro e regras configuráveis por competição;
+- faltas contextuais, amarelos, segundo amarelo, vermelho direto e expulsão efetiva;
+- impedimentos sensíveis a risco, movimento, passe e altura da linha defensiva;
+- faltas diretas, escanteios e pênaltis resolvidos pelos atributos pertinentes;
+- rebotes encadeados à defesa que os originou, com uma segunda bola limitada;
+- acréscimos calculados por incidentes e convertidos em posses extras auditáveis;
 - estatísticas reconstruídas para todos os confrontos confirmados;
-- testes de replay, causalidade, isolamento, fadiga, pés, especialistas, tática e substituição;
-- calibradores geral, de perfis especialistas e de decisões do treinador.
+- testes de replay, causalidade, isolamento, fadiga, pés, especialistas, tática, substituição e regras;
+- calibradores geral, de especialistas, de decisões do treinador e de arbitragem/regras.
 
 ## Limite de integração
 
-O motor só substituirá o legado depois de receber as regras essenciais das fases seguintes e um adaptador explícito. Até lá, nenhum save existente ou resultado da interface é alterado.
+O motor só substituirá o legado depois de receber um adaptador explícito e passar pela integração gradual com a carreira. Até lá, nenhum save existente ou resultado da interface é alterado.
 
 ## Calibração
 
@@ -43,6 +49,7 @@ O motor só substituirá o legado depois de receber as regras essenciais das fas
 npm run calibrate:match-engine -- 10000
 npm run calibrate:match-engine:specialists -- 1000
 npm run calibrate:match-engine:tactics -- 1000
+npm run calibrate:match-engine:rules -- 1000
 ```
 
-Os comandos informam distribuição de resultados, ações, fadiga, repetibilidade, diferenças de especialistas e sensibilidade às decisões do treinador antes da integração visual.
+Os comandos informam distribuição de resultados, ações, fadiga, repetibilidade, diferenças de especialistas, sensibilidade às decisões do treinador e frequência das regras antes da integração visual.

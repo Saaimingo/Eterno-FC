@@ -6,9 +6,12 @@ import {
   PLAYER_ATTRIBUTE_KEYS,
   EventLedger,
   FatigueTracker,
+  MATCH_ENGINE_VERSION,
   adjustPlayerAttributes,
   adjustPlayerFeet,
   adjustPlayerTraits,
+  adjustRoleAssignment,
+  adjustTacticalPlan,
   attackActionModifier,
   adjustTeamAttributes,
   calculateActionPressure,
@@ -16,8 +19,13 @@ import {
   calculateCrossProbability,
   calculateDribbleProbability,
   calculateGoalProbability,
+  calculateFoulProbability,
+  calculateOffsideProbability,
   calculatePassProbability,
+  calculateReboundProbability,
+  calculateSetPieceDeliveryProbability,
   calculateShotOnTargetProbability,
+  calculateStoppageSeconds,
   createPrototypeMatchInput,
   resolveFootUse,
   scheduleMatchInterventions,
@@ -57,7 +65,7 @@ test("replays the same match exactly from the same seed and input", () => {
 });
 
 test("derives every goal and every statistic from confirmed events", () => {
-  const result = simulateMatch(createPrototypeMatchInput("causal-0"));
+  const result = simulateMatch(createPrototypeMatchInput("causal-2"));
   const goals = result.events.filter((event) => event.type === "goal");
   assert.ok(goals.length > 0);
 
@@ -741,4 +749,262 @@ test("makes a flank intervention measurable without turning it into a guaranteed
   assert.ok(changedCrosses > baselineCrosses * 1.12);
   assert.ok(changedWins > 0);
   assert.ok(changedNonWins > 0);
+});
+
+test("validates the competition rules and referee profile introduced in MP-4", () => {
+  const input = createPrototypeMatchInput("mp4-rules-contract");
+  assert.equal(MATCH_ENGINE_VERSION, "0.4.0-mp4");
+  assert.equal(input.context.rules.maxSubstitutions, 5);
+  assert.equal(input.context.rules.secondYellowDismissal, true);
+  assert.equal(input.context.rules.offsideEnabled, true);
+  assert.equal(input.context.rules.stoppageTimeEnabled, true);
+  assert.throws(
+    () => validateMatchInput({
+      ...input,
+      context: { ...input.context, referee: { ...input.context.referee, strictness: 101 } },
+    }),
+    /Rigor do árbitro/,
+  );
+  assert.throws(
+    () => validateMatchInput({
+      ...input,
+      context: { ...input.context, rules: { ...input.context.rules, maxSubstitutions: 13 } },
+    }),
+    /Limite de substituições/,
+  );
+});
+
+test("records fouls, discipline, offsides, set pieces, rebounds and stoppage time canonically", () => {
+  const results = [0, 1, 3].map((index) => simulateMatch(createPrototypeMatchInput(`mp4-event-${index}`)));
+  const events = results.flatMap((result) => result.events);
+  for (const eventType of [
+    "foul", "yellow_card", "red_card", "offside", "free_kick",
+    "corner", "penalty_kick", "rebound", "stoppage_time",
+  ]) {
+    assert.ok(events.some((event) => event.type === eventType), `evento ausente: ${eventType}`);
+  }
+
+  for (const result of results) {
+    for (const [teamId, statistics] of [
+      [result.input.home.id, result.statistics.home],
+      [result.input.away.id, result.statistics.away],
+    ]) {
+      assert.equal(statistics.foulsCommitted, result.events.filter((event) => event.type === "foul" && event.teamId === teamId).length);
+      assert.equal(statistics.yellowCards, result.events.filter((event) => event.type === "yellow_card" && event.teamId === teamId).length);
+      assert.equal(statistics.redCards, result.events.filter((event) => event.type === "red_card" && event.teamId === teamId).length);
+      assert.equal(statistics.offsides, result.events.filter((event) => event.type === "offside" && event.teamId === teamId).length);
+      assert.equal(statistics.corners, result.events.filter((event) => event.type === "corner" && event.teamId === teamId).length);
+      assert.equal(statistics.penalties, result.events.filter((event) => event.type === "penalty_kick" && event.teamId === teamId).length);
+    }
+  }
+});
+
+test("makes foul risk depend on the defender's challenge profile instead of a generic dice roll", () => {
+  const input = createPrototypeMatchInput("mp4-foul-profile");
+  const victim = input.home.players.find((player) => player.position === "AM");
+  const defender = input.away.players.find((player) => player.position === "DM");
+  assert.ok(victim && defender);
+  const controlled = {
+    ...defender,
+    attributes: {
+      ...defender.attributes,
+      aggression: Math.max(1, defender.attributes.aggression - 20),
+      tackling: Math.min(100, defender.attributes.tackling + 20),
+      decisions: Math.min(100, defender.attributes.decisions + 20),
+      composure: Math.min(100, defender.attributes.composure + 15),
+    },
+  };
+  const reckless = {
+    ...defender,
+    attributes: {
+      ...defender.attributes,
+      aggression: Math.min(100, defender.attributes.aggression + 20),
+      tackling: Math.max(1, defender.attributes.tackling - 20),
+      decisions: Math.max(1, defender.attributes.decisions - 20),
+      composure: Math.max(1, defender.attributes.composure - 15),
+    },
+  };
+  const teamWith = (player) => ({
+    ...input.away,
+    players: input.away.players.map((candidate) => candidate.id === player.id ? player : candidate),
+  });
+  const safe = calculateFoulProbability({
+    defender: controlled,
+    victim,
+    defendingTeam: teamWith(controlled),
+    context: input.context,
+    phase: "danger",
+    defenderFatigue: 35,
+    pressure: 65,
+    contestedDribble: true,
+  });
+  const risky = calculateFoulProbability({
+    defender: reckless,
+    victim,
+    defendingTeam: teamWith(reckless),
+    context: input.context,
+    phase: "danger",
+    defenderFatigue: 35,
+    pressure: 65,
+    contestedDribble: true,
+  });
+  assert.ok(risky.probability > safe.probability + 0.06);
+});
+
+test("makes the offside line respond to risk, movement and defensive height", () => {
+  const input = createPrototypeMatchInput("mp4-offside-profile");
+  const passer = input.home.players.find((player) => player.position === "AM");
+  const receiver = input.home.players.find((player) => player.position === "ST");
+  const defender = input.away.players.find((player) => player.position === "CB");
+  assert.ok(passer && receiver && defender);
+  const cautiousAttack = adjustRoleAssignment(
+    adjustTacticalPlan(input.home, { risk: 25, tempo: 35, passingStyle: "short" }),
+    receiver.id,
+    { instructions: { movement: "hold" } },
+  );
+  const aggressiveAttack = adjustRoleAssignment(
+    adjustTacticalPlan(input.home, { risk: 85, tempo: 82, passingStyle: "direct" }),
+    receiver.id,
+    { role: "poacher", instructions: { movement: "get_forward" } },
+  );
+  const deepDefense = adjustTacticalPlan(input.away, { defensiveLine: 25 });
+  const highDefense = adjustTacticalPlan(input.away, { defensiveLine: 82 });
+  const low = calculateOffsideProbability({
+    attackingTeam: cautiousAttack,
+    defendingTeam: deepDefense,
+    passer,
+    receiver,
+    defender,
+    phase: "creation",
+  });
+  const high = calculateOffsideProbability({
+    attackingTeam: aggressiveAttack,
+    defendingTeam: highDefense,
+    passer,
+    receiver,
+    defender,
+    phase: "creation",
+  });
+  assert.ok(high.probability > low.probability + 0.045);
+});
+
+test("keeps set-piece and rebound execution tied to their relevant attributes", () => {
+  const input = createPrototypeMatchInput("mp4-specialist-isolation");
+  const taker = input.home.players.find((player) => player.position === "AM");
+  const marker = input.away.players.find((player) => player.position === "CB");
+  const attacker = input.home.players.find((player) => player.position === "ST");
+  const goalkeeper = input.away.players.find((player) => player.position === "GK");
+  assert.ok(taker && marker && attacker && goalkeeper);
+  const delivery = calculateSetPieceDeliveryProbability({ taker, marker, kind: "free_kick" });
+  const specialistDelivery = calculateSetPieceDeliveryProbability({
+    taker: { ...taker, attributes: { ...taker.attributes, freeKick: Math.min(100, taker.attributes.freeKick + 20) } },
+    marker,
+    kind: "free_kick",
+  });
+  const irrelevantFinishing = calculateSetPieceDeliveryProbability({
+    taker: { ...taker, attributes: { ...taker.attributes, finishing: Math.min(100, taker.attributes.finishing + 20) } },
+    marker,
+    kind: "free_kick",
+  });
+  assert.ok(specialistDelivery.probability > delivery.probability);
+  assert.equal(irrelevantFinishing.probability, delivery.probability);
+
+  const rebound = calculateReboundProbability({ attacker, defender: marker, goalkeeper });
+  const alertAttacker = calculateReboundProbability({
+    attacker: {
+      ...attacker,
+      attributes: {
+        ...attacker.attributes,
+        anticipation: Math.min(100, attacker.attributes.anticipation + 20),
+        offBall: Math.min(100, attacker.attributes.offBall + 20),
+      },
+    },
+    defender: marker,
+    goalkeeper,
+  });
+  assert.ok(alertAttacker.probability > rebound.probability + 0.035);
+});
+
+test("dismisses a player after a second yellow and excludes him from every later action", () => {
+  const result = simulateMatch(createPrototypeMatchInput("mp4-event-1"));
+  const red = result.events.find((event) => event.type === "red_card");
+  assert.ok(red);
+  assert.equal(red.outcome, "second_yellow");
+  const state = result.finalState.players.find((player) => player.playerId === red.actorId);
+  assert.equal(state?.status, "sent_off");
+  assert.equal(state?.yellowCards, 2);
+  assert.equal(state?.exitedAtMs, red.clockMs);
+  assert.equal(result.events.some((event) => event.sequence > red.sequence
+    && (event.actorId === red.actorId || event.targetId === red.actorId || event.opponentIds.includes(red.actorId))), false);
+});
+
+test("cancels a pre-planned substitution safely when a later red card makes it impossible", () => {
+  const input = createPrototypeMatchInput("mp4-event-1");
+  const outgoing = input.away.assignments.find((assignment) => assignment.playerId === "ferro-azul-p5");
+  assert.ok(outgoing);
+  const scheduled = scheduleMatchInterventions(input, [{
+    id: "red-card-invalidates-plan",
+    type: "substitution",
+    teamId: input.away.id,
+    clockMs: 4_000_000,
+    playerOutId: "ferro-azul-p5",
+    playerInId: "ferro-azul-p18",
+    assignment: { ...outgoing, playerId: "ferro-azul-p18" },
+  }]);
+  const result = simulateMatch(scheduled);
+  const red = result.events.find((event) => event.type === "red_card" && event.actorId === "ferro-azul-p5");
+  const substitution = result.events.find((event) => event.type === "substitution");
+  assert.ok(red && substitution);
+  assert.ok(red.sequence < substitution.sequence);
+  assert.equal(substitution.outcome, "cancelled_player_unavailable");
+  assert.equal(result.finalState.players.find((player) => player.playerId === "ferro-azul-p18")?.status, "bench");
+});
+
+test("chains penalties and rebounds to the exact incidents that created them", () => {
+  const penaltyResult = simulateMatch(createPrototypeMatchInput("mp4-event-3"));
+  const penalty = penaltyResult.events.find((event) => event.type === "penalty_kick");
+  assert.ok(penalty);
+  const penaltyChain = traceCausalChain(penaltyResult.events, penalty.eventId);
+  assert.ok(penaltyChain.some((event) => event.type === "foul"));
+  assert.ok(penaltyResult.events.some((event) => event.type === "shot" && event.causes.includes(penalty.eventId)));
+
+  const reboundResult = simulateMatch(createPrototypeMatchInput("mp4-event-0"));
+  const rebounds = reboundResult.events.filter((event) => event.type === "rebound");
+  assert.ok(rebounds.length > 0);
+  for (const rebound of rebounds) {
+    const chain = traceCausalChain(reboundResult.events, rebound.eventId);
+    assert.equal(chain.at(-1)?.type, "rebound");
+    assert.equal(chain.at(-2)?.type, "save");
+    assert.ok(chain.some((event) => event.type === "shot"));
+  }
+});
+
+test("derives bounded stoppage time from incidents and plays auditable extra possessions", () => {
+  const calmFirstHalf = calculateStoppageSeconds({
+    period: 1,
+    goals: 0,
+    fouls: 4,
+    cards: 0,
+    substitutions: 0,
+    referee: createPrototypeMatchInput("stoppage-calm").context.referee,
+    randomValue: 0.2,
+  });
+  const busySecondHalf = calculateStoppageSeconds({
+    period: 2,
+    goals: 4,
+    fouls: 12,
+    cards: 5,
+    substitutions: 6,
+    referee: createPrototypeMatchInput("stoppage-busy").context.referee,
+    randomValue: 0.8,
+  });
+  assert.ok(busySecondHalf > calmFirstHalf + 180);
+  assert.ok(calmFirstHalf >= 45 && calmFirstHalf <= 300);
+  assert.ok(busySecondHalf >= 90 && busySecondHalf <= 480);
+
+  const result = simulateMatch(createPrototypeMatchInput("mp4-event-0"));
+  const announcements = result.events.filter((event) => event.type === "stoppage_time");
+  assert.equal(announcements.length, 2);
+  assert.ok(announcements.every((event) => Number(event.audit?.details?.addedSeconds) > 0));
+  assert.ok(result.events.some((event) => event.type === "possession_start" && event.tags.includes("stoppage_time")));
 });
