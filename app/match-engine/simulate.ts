@@ -2,6 +2,7 @@ import {
   MATCH_ENGINE_VERSION,
   type CanonicalMatchEvent,
   type Foot,
+  type MatchDecision,
   type MatchInput,
   type MatchPeriod,
   type MatchPlayer,
@@ -56,6 +57,8 @@ import {
 
 const PERIOD_DURATION_MS = 2_700_000;
 const MATCH_DURATION_MS = PERIOD_DURATION_MS * 2;
+const EXTRA_TIME_PERIOD_MS = 900_000;
+const MAX_MATCH_DURATION_MS = MATCH_DURATION_MS + EXTRA_TIME_PERIOD_MS * 2;
 const PASS_PHASES: readonly PossessionPhase[] = ["buildup", "progression", "creation"];
 const PHASE_X: Record<PossessionPhase, number> = {
   restart: 8,
@@ -1563,14 +1566,17 @@ function buildResult(
   discipline: DisciplineTracker,
   homeRuntime: TeamMatchRuntime,
   awayRuntime: TeamMatchRuntime,
+  decision: MatchDecision,
+  finalPeriod: MatchPeriod,
+  finalClockMs: number,
 ): MatchResult {
   ledger.assertComplete();
   const events = ledger.events();
   const finalState: MatchState = Object.freeze({
     engineVersion: MATCH_ENGINE_VERSION,
     status: "finished",
-    period: 2,
-    clockMs: MATCH_DURATION_MS,
+    period: finalPeriod,
+    clockMs: finalClockMs,
     score: ledger.score(),
     possessionTeamId: null,
     players: Object.freeze([
@@ -1582,6 +1588,14 @@ function buildResult(
     engineVersion: MATCH_ENGINE_VERSION,
     input,
     finalState,
+    decision: Object.freeze({
+      ...decision,
+      regulationScore: Object.freeze([...decision.regulationScore]) as MatchDecision["regulationScore"],
+      finalScore: Object.freeze([...decision.finalScore]) as MatchDecision["finalScore"],
+      shootoutScore: decision.shootoutScore
+        ? Object.freeze([...decision.shootoutScore]) as MatchDecision["shootoutScore"]
+        : undefined,
+    }),
     events,
     rngTraces: rng.traces(),
     statistics: projectStatistics(events, input.home.id, input.away.id),
@@ -1629,19 +1643,103 @@ export function simulateEmptyMatch(input: MatchInput): MatchResult {
     outcome: "ended",
     causes: [secondKickoff.eventId],
   });
+  const regulationScore = ledger.score();
+  let previousEvent = secondEnd;
+  let finalPeriod: MatchPeriod = 2;
+  let method: MatchDecision["method"] = "draw";
+  let winnerTeamId: string | null = null;
+  let shootoutScore: MatchDecision["shootoutScore"];
+
+  if (input.context.rules.drawResolution === "extra_time_and_penalties") {
+    const firstExtraKickoff = ledger.append({
+      clockMs: MATCH_DURATION_MS,
+      period: 3,
+      type: "kickoff",
+      teamId: input.home.id,
+      phase: "restart",
+      outcome: "extra_time_started",
+      tags: ["extra_time"],
+      causes: [previousEvent.eventId],
+    });
+    const firstExtraEnd = ledger.append({
+      clockMs: MATCH_DURATION_MS + EXTRA_TIME_PERIOD_MS,
+      period: 3,
+      type: "period_end",
+      teamId: null,
+      outcome: "ended",
+      tags: ["extra_time"],
+      causes: [firstExtraKickoff.eventId],
+    });
+    const secondExtraKickoff = ledger.append({
+      clockMs: MATCH_DURATION_MS + EXTRA_TIME_PERIOD_MS,
+      period: 4,
+      type: "kickoff",
+      teamId: input.away.id,
+      phase: "restart",
+      outcome: "extra_time_started",
+      tags: ["extra_time"],
+      causes: [firstExtraEnd.eventId],
+    });
+    previousEvent = ledger.append({
+      clockMs: MAX_MATCH_DURATION_MS,
+      period: 4,
+      type: "period_end",
+      teamId: null,
+      outcome: "ended",
+      tags: ["extra_time"],
+      causes: [secondExtraKickoff.eventId],
+    });
+    const shootout = resolvePenaltyShootout({
+      matchInput: input,
+      ledger,
+      rng,
+      fatigue,
+      home: homeRuntime.snapshot(),
+      away: awayRuntime.snapshot(),
+      previousEvent,
+    });
+    previousEvent = shootout.previousEvent;
+    winnerTeamId = shootout.winnerTeamId;
+    shootoutScore = shootout.shootoutScore;
+    method = "penalties";
+    finalPeriod = 5;
+  }
+
   ledger.append({
-    clockMs: MATCH_DURATION_MS,
-    period: 2,
+    clockMs: input.context.rules.drawResolution === "extra_time_and_penalties" ? MAX_MATCH_DURATION_MS : MATCH_DURATION_MS,
+    period: finalPeriod,
     type: "match_end",
     teamId: null,
-    outcome: "finished",
-    causes: [secondEnd.eventId],
+    outcome: method === "penalties" ? "finished_after_penalties" : "finished",
+    tags: method === "penalties" ? ["penalty_shootout"] : [],
+    causes: [previousEvent.eventId],
   });
-  return buildResult(input, ledger, rng, fatigue, discipline, homeRuntime, awayRuntime);
+  const finalScore = ledger.score();
+  return buildResult(
+    input,
+    ledger,
+    rng,
+    fatigue,
+    discipline,
+    homeRuntime,
+    awayRuntime,
+    Object.freeze({
+      method,
+      winnerTeamId,
+      regulationScore,
+      finalScore,
+      shootoutScore,
+    }),
+    finalPeriod,
+    input.context.rules.drawResolution === "extra_time_and_penalties" ? MAX_MATCH_DURATION_MS : MATCH_DURATION_MS,
+  );
 }
 
 function interventionPeriod(clockMs: number): MatchPeriod {
-  return clockMs < PERIOD_DURATION_MS ? 1 : 2;
+  if (clockMs < PERIOD_DURATION_MS) return 1;
+  if (clockMs < MATCH_DURATION_MS) return 2;
+  if (clockMs < MATCH_DURATION_MS + EXTRA_TIME_PERIOD_MS) return 3;
+  return 4;
 }
 
 function applyIntervention(input: {
@@ -1716,6 +1814,160 @@ function applyIntervention(input: {
   });
 }
 
+function penaltyOrder(team: TeamSnapshot) {
+  const outfield = team.players.filter((player) => player.position !== "GK");
+  const candidates = outfield.length ? outfield : [...team.players];
+  return [...candidates].sort((left, right) => {
+    const score = (player: MatchPlayer) => player.attributes.penalties * 0.5
+      + player.attributes.composure * 0.25
+      + player.attributes.technique * 0.1
+      + player.attributes.decisions * 0.1
+      + player.attributes.finishing * 0.05;
+    return score(right) - score(left) || left.id.localeCompare(right.id);
+  });
+}
+
+function shootoutGoalkeeper(team: TeamSnapshot) {
+  return team.players.find((player) => player.position === "GK")
+    ?? [...team.players].sort((left, right) => {
+      const score = (player: MatchPlayer) => player.attributes.oneOnOnes * 0.34
+        + player.attributes.reflexes * 0.28
+        + player.attributes.anticipation * 0.16
+        + player.attributes.composure * 0.12
+        + player.attributes.handling * 0.1;
+      return score(right) - score(left) || left.id.localeCompare(right.id);
+    })[0];
+}
+
+function resolvePenaltyShootout(input: {
+  matchInput: MatchInput;
+  ledger: EventLedger;
+  rng: SeededRng;
+  fatigue: FatigueTracker;
+  home: TeamSnapshot;
+  away: TeamSnapshot;
+  previousEvent: CanonicalMatchEvent;
+}) {
+  const { matchInput, ledger, rng, fatigue, home, away } = input;
+  const homeGoalkeeper = shootoutGoalkeeper(home);
+  const awayGoalkeeper = shootoutGoalkeeper(away);
+  if (!homeGoalkeeper || !awayGoalkeeper) throw new Error("Disputa por pênaltis exige um goleiro em cada equipe.");
+  const orders = new Map([
+    [home.id, penaltyOrder(home)],
+    [away.id, penaltyOrder(away)],
+  ]);
+  let previousEvent = input.previousEvent;
+  let homeGoals = 0;
+  let awayGoals = 0;
+  let homeTaken = 0;
+  let awayTaken = 0;
+  let winnerTeamId: string | null = null;
+  let kickNumber = 0;
+
+  function takeKick(team: TeamSnapshot, opponent: TeamSnapshot, goalkeeper: MatchPlayer) {
+    kickNumber += 1;
+    const isHome = team.id === home.id;
+    const teamTaken = isHome ? homeTaken : awayTaken;
+    const takers = orders.get(team.id)!;
+    const taker = takers[teamTaken % takers.length];
+    const suddenDeath = homeTaken >= 5 && awayTaken >= 5;
+    const pressure = Math.min(100, 42 + matchInput.context.importance * 0.3 + kickNumber * 1.4 + (suddenDeath ? 12 : 0));
+    const foot = resolvePlayerFootUse(taker, "either", true);
+    const breakdown = calculateGoalProbability({
+      shooter: taker,
+      goalkeeper,
+      homeAdvantage: 0,
+      shotType: "penalty",
+      shooterFatigue: fatigue.value(taker),
+      goalkeeperFatigue: fatigue.value(goalkeeper),
+      pressure,
+      foot,
+      shooterFamiliarity: familiarityFor(team, taker),
+      goalkeeperFamiliarity: familiarityFor(opponent, goalkeeper),
+    });
+    const conversion = rng.chance(breakdown.probability, `shootout.${kickNumber}.${team.id}.conversion`);
+    const saved = conversion.success
+      ? false
+      : rng.chance(0.68, `shootout.${kickNumber}.${team.id}.saved`).success;
+    const outcome = conversion.success ? "scored" : saved ? "saved" : "missed";
+    if (isHome) {
+      homeTaken += 1;
+      if (conversion.success) homeGoals += 1;
+    } else {
+      awayTaken += 1;
+      if (conversion.success) awayGoals += 1;
+    }
+    fatigue.exert(taker, 0.18);
+    fatigue.exert(goalkeeper, 0.12);
+    previousEvent = ledger.append({
+      clockMs: MAX_MATCH_DURATION_MS,
+      period: 5,
+      type: "shootout_kick",
+      teamId: team.id,
+      actorId: taker.id,
+      targetId: goalkeeper.id,
+      opponentIds: [goalkeeper.id],
+      phase: "danger",
+      origin: { x: 88, y: 50 },
+      destination: { x: 100, y: 50 },
+      outcome,
+      tags: ["penalty_shootout", suddenDeath ? "sudden_death" : "opening_five", ...footTags(foot)],
+      causes: [previousEvent.eventId],
+      rngTraceId: conversion.traceId,
+      audit: {
+        probability: conversion.probability,
+        roll: conversion.roll,
+        components: auditComponents(breakdown),
+        details: {
+          kickNumber,
+          round: Math.max(homeTaken, awayTaken),
+          teamKick: isHome ? homeTaken : awayTaken,
+          homeShootoutGoals: homeGoals,
+          awayShootoutGoals: awayGoals,
+          suddenDeath,
+          pressure: Number(pressure.toFixed(2)),
+        },
+      },
+    });
+  }
+
+  for (let round = 1; round <= 100 && !winnerTeamId; round += 1) {
+    takeKick(home, away, awayGoalkeeper);
+    if (homeGoals > awayGoals + Math.max(0, 5 - awayTaken)) {
+      winnerTeamId = home.id;
+      break;
+    }
+    if (awayGoals > homeGoals + Math.max(0, 5 - homeTaken)) {
+      winnerTeamId = away.id;
+      break;
+    }
+
+    takeKick(away, home, homeGoalkeeper);
+    if (homeGoals > awayGoals + Math.max(0, 5 - awayTaken)) winnerTeamId = home.id;
+    else if (awayGoals > homeGoals + Math.max(0, 5 - homeTaken)) winnerTeamId = away.id;
+    else if (homeTaken >= 5 && awayTaken >= 5 && homeTaken === awayTaken && homeGoals !== awayGoals) {
+      winnerTeamId = homeGoals > awayGoals ? home.id : away.id;
+    }
+  }
+  if (!winnerTeamId) throw new Error("A disputa por pênaltis excedeu o limite de segurança sem vencedor.");
+
+  const end = ledger.append({
+    clockMs: MAX_MATCH_DURATION_MS,
+    period: 5,
+    type: "shootout_end",
+    teamId: winnerTeamId,
+    outcome: "decided",
+    tags: ["penalty_shootout", "winner_confirmed"],
+    causes: [previousEvent.eventId],
+    audit: { details: { homeShootoutGoals: homeGoals, awayShootoutGoals: awayGoals, kicks: kickNumber } },
+  });
+  return Object.freeze({
+    previousEvent: end,
+    winnerTeamId,
+    shootoutScore: Object.freeze([homeGoals, awayGoals]) as readonly [number, number],
+  });
+}
+
 export function simulateMatch(input: MatchInput): MatchResult {
   validateMatchInput(input);
   const ledger = new EventLedger(input.context.matchId, input.home.id, input.away.id);
@@ -1751,25 +2003,31 @@ export function simulateMatch(input: MatchInput): MatchResult {
     return latest;
   }
 
-  for (const period of [1, 2] as const) {
-    const periodStart = (period - 1) * PERIOD_DURATION_MS;
+  function simulatePeriod(
+    period: MatchPeriod,
+    periodStart: number,
+    periodDuration: number,
+    possessions: number,
+    stoppageEnabled: boolean,
+  ) {
     const periodEventStart = ledger.events().length;
-    const kickoffTeamId = period === 1 ? input.home.id : input.away.id;
+    const kickoffTeamId = period === 1 || period === 3 ? input.home.id : input.away.id;
     const kickoff = ledger.append({
       clockMs: periodStart,
       period,
       type: "kickoff",
       teamId: kickoffTeamId,
       phase: "restart",
-      outcome: "started",
+      outcome: period <= 2 ? "started" : "extra_time_started",
+      tags: period <= 2 ? [] : ["extra_time"],
       causes: previousEvent ? [previousEvent.eventId] : [],
     });
     previousEvent = kickoff;
     let forcedPossessionTeamId: string | null = kickoffTeamId;
     let restartAfterGoal = false;
 
-    for (let index = 0; index < input.context.possessionsPerPeriod; index += 1) {
-      const possessionClock = periodStart + Math.floor((index + 0.5) * PERIOD_DURATION_MS / input.context.possessionsPerPeriod);
+    for (let index = 0; index < possessions; index += 1) {
+      const possessionClock = periodStart + Math.floor((index + 0.5) * periodDuration / possessions);
       previousEvent = applyDueInterventions(possessionClock, true, previousEvent);
       const currentHome = homeRuntime.snapshot();
       const currentAway = awayRuntime.snapshot();
@@ -1815,8 +2073,8 @@ export function simulateMatch(input: MatchInput): MatchResult {
       restartAfterGoal = Boolean(result.goalTeamId);
     }
 
-    previousEvent = applyDueInterventions(periodStart + PERIOD_DURATION_MS, false, previousEvent);
-    if (input.context.rules.stoppageTimeEnabled) {
+    previousEvent = applyDueInterventions(periodStart + periodDuration, false, previousEvent);
+    if (input.context.rules.stoppageTimeEnabled && stoppageEnabled) {
       const periodEvents = ledger.events().slice(periodEventStart);
       const goals = periodEvents.filter((event) => event.type === "goal").length;
       const fouls = periodEvents.filter((event) => event.type === "foul").length;
@@ -1824,7 +2082,7 @@ export function simulateMatch(input: MatchInput): MatchResult {
       const substitutions = periodEvents.filter((event) => event.type === "substitution" && event.outcome === "completed").length;
       const stoppageTrace = rng.next(`p${period}.stoppage_time`);
       const addedSeconds = calculateStoppageSeconds({
-        period,
+        period: period as 1 | 2,
         goals,
         fouls,
         cards,
@@ -1839,7 +2097,7 @@ export function simulateMatch(input: MatchInput): MatchResult {
         teamId: null,
         phase: "restart",
         outcome: "announced",
-        tags: ["stoppage_time", period === 1 ? "first_half" : "second_half"],
+        tags: ["stoppage_time", period === 1 ? "first_half" : period === 2 ? "second_half" : "extra_time"],
         causes: [previousEvent.eventId],
         rngTraceId: stoppageTrace.traceId,
         audit: {
@@ -1856,7 +2114,7 @@ export function simulateMatch(input: MatchInput): MatchResult {
 
       const requestedExtraPossessions = Math.max(1, Math.min(4, Math.round(addedSeconds / 110)));
       for (let extraIndex = 0; extraIndex < requestedExtraPossessions; extraIndex += 1) {
-        const periodEndClock = periodStart + PERIOD_DURATION_MS;
+        const periodEndClock = periodStart + periodDuration;
         if (periodEndClock - previousEvent.clockMs < 8_500) break;
         const possessionClock = previousEvent.clockMs + 120;
         const currentHome = homeRuntime.snapshot();
@@ -1888,7 +2146,7 @@ export function simulateMatch(input: MatchInput): MatchResult {
           period,
           clockMs: previousEvent.type === "kickoff" ? previousEvent.clockMs + 120 : possessionClock,
           causeEventId: previousEvent.eventId,
-          possessionIndex: input.context.possessionsPerPeriod + extraIndex,
+          possessionIndex: possessions + extraIndex,
           discipline,
           runtimes,
           stoppage: true,
@@ -1901,23 +2159,85 @@ export function simulateMatch(input: MatchInput): MatchResult {
       }
     }
     previousEvent = ledger.append({
-      clockMs: periodStart + PERIOD_DURATION_MS,
+      clockMs: periodStart + periodDuration,
       period,
       type: "period_end",
       teamId: null,
       outcome: "ended",
+      tags: period === 2
+        && input.context.rules.drawResolution === "extra_time_and_penalties"
+        && ledger.score()[0] === ledger.score()[1]
+        ? ["extra_time_required"]
+        : period <= 2 ? [] : ["extra_time"],
       causes: [previousEvent.eventId],
     });
   }
 
+  simulatePeriod(1, 0, PERIOD_DURATION_MS, input.context.possessionsPerPeriod, true);
+  simulatePeriod(2, PERIOD_DURATION_MS, PERIOD_DURATION_MS, input.context.possessionsPerPeriod, true);
   if (!previousEvent) throw new Error("A partida terminou sem evento anterior.");
+  const regulationScore = ledger.score();
+  let finalPeriod: MatchPeriod = 2;
+  let finalClockMs = MATCH_DURATION_MS;
+  let winnerTeamId: string | null = regulationScore[0] > regulationScore[1]
+    ? input.home.id
+    : regulationScore[1] > regulationScore[0]
+      ? input.away.id
+      : null;
+  let method: MatchDecision["method"] = winnerTeamId ? "regulation" : "draw";
+  let shootoutScore: MatchDecision["shootoutScore"];
+
+  if (!winnerTeamId && input.context.rules.drawResolution === "extra_time_and_penalties") {
+    const extraPossessions = Math.max(5, Math.round(input.context.possessionsPerPeriod / 3));
+    simulatePeriod(3, MATCH_DURATION_MS, EXTRA_TIME_PERIOD_MS, extraPossessions, false);
+    simulatePeriod(4, MATCH_DURATION_MS + EXTRA_TIME_PERIOD_MS, EXTRA_TIME_PERIOD_MS, extraPossessions, false);
+    if (!previousEvent) throw new Error("A prorrogação terminou sem evento anterior.");
+    finalPeriod = 4;
+    finalClockMs = MAX_MATCH_DURATION_MS;
+    const extraTimeScore = ledger.score();
+    winnerTeamId = extraTimeScore[0] > extraTimeScore[1]
+      ? input.home.id
+      : extraTimeScore[1] > extraTimeScore[0]
+        ? input.away.id
+        : null;
+    method = winnerTeamId ? "extra_time" : "penalties";
+    if (!winnerTeamId) {
+      const shootout = resolvePenaltyShootout({
+        matchInput: input,
+        ledger,
+        rng,
+        fatigue,
+        home: homeRuntime.snapshot(),
+        away: awayRuntime.snapshot(),
+        previousEvent,
+      });
+      previousEvent = shootout.previousEvent;
+      winnerTeamId = shootout.winnerTeamId;
+      shootoutScore = shootout.shootoutScore;
+      finalPeriod = 5;
+    }
+  }
+
+  const finalScore = ledger.score();
   ledger.append({
-    clockMs: MATCH_DURATION_MS,
-    period: 2,
+    clockMs: finalClockMs,
+    period: finalPeriod,
     type: "match_end",
     teamId: null,
-    outcome: "finished",
+    outcome: method === "penalties" ? "finished_after_penalties" : method === "extra_time" ? "finished_after_extra_time" : "finished",
+    tags: method === "penalties" ? ["penalty_shootout"] : method === "extra_time" ? ["extra_time"] : [],
     causes: [previousEvent.eventId],
   });
-  return buildResult(input, ledger, rng, fatigue, discipline, homeRuntime, awayRuntime);
+  return buildResult(
+    input,
+    ledger,
+    rng,
+    fatigue,
+    discipline,
+    homeRuntime,
+    awayRuntime,
+    Object.freeze({ method, winnerTeamId, regulationScore, finalScore, shootoutScore }),
+    finalPeriod,
+    finalClockMs,
+  );
 }
