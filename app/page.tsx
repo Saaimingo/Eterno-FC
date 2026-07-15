@@ -17,6 +17,7 @@ import {
   formatMoney,
   getAvailableClubs,
   migrateGame,
+  matchPlanPrefixIsStable,
   nextUserFixture,
   promoteYouth,
   rejectBid,
@@ -39,7 +40,15 @@ import {
   type MatchPlan,
   type Player,
 } from "./game";
-import { selectVNextMatchPlayers } from "./match-adapter";
+import {
+  LIVE_TACTICAL_PRESETS,
+  createLiveSubstitutionIntervention,
+  createLiveTacticalIntervention,
+  selectLiveVNextPlayers,
+  selectVNextMatchPlayers,
+  type LiveTacticalPreset,
+} from "./match-adapter";
+import type { MatchIntervention } from "./match-engine";
 import { loadCareerState, saveCareerState } from "./persistence";
 
 const STORAGE_KEY = "eterno-fc-careers-v2";
@@ -337,7 +346,10 @@ function NewsView({ game }: { game: GameState }) {
   return <><SectionIntro eyebrow="MUNDO DO FUTEBOL" title="Central de notícias">Resultados, decisões de mercado, categorias de base e os capítulos da sua carreira.</SectionIntro><section className="news-feed">{game.news.map((item)=><article className={`news-item panel ${item.unread?"unread":""}`} key={item.id}><span>{item.category}</span><div><small>{formatGameDate(item.date,true)}</small><h2>{item.title}</h2><p>{item.body}</p></div></article>)}</section></>;
 }
 
-function MatchCenter({ game, plan, minute, running, speed, goalMoment, onSpeedChange, onToggle, onSkip, onFinish, onClose }: { game: GameState; plan: MatchPlan; minute: number; running: boolean; speed: "Lenta"|"Normal"|"Rápida"|"Ultra"; goalMoment: MatchEvent|null; onSpeedChange:(speed:"Lenta"|"Normal"|"Rápida"|"Ultra")=>void; onToggle:()=>void; onSkip:()=>void; onFinish:()=>void; onClose:()=>void }) {
+function MatchCenter({ game, plan, minute, running, speed, goalMoment, interventions, coachingStatus, onSpeedChange, onToggle, onTacticalChange, onSubstitution, onSkip, onFinish, onClose }: { game: GameState; plan: MatchPlan; minute: number; running: boolean; speed: "Lenta"|"Normal"|"Rápida"|"Ultra"; goalMoment: MatchEvent|null; interventions: readonly MatchIntervention[]; coachingStatus: string; onSpeedChange:(speed:"Lenta"|"Normal"|"Rápida"|"Ultra")=>void; onToggle:()=>void; onTacticalChange:(preset:LiveTacticalPreset)=>boolean; onSubstitution:(playerOutId:string,playerInId:string)=>boolean; onSkip:()=>void; onFinish:()=>void; onClose:()=>void }) {
+  const [coachingOpen,setCoachingOpen]=useState(false);
+  const [playerOutId,setPlayerOutId]=useState("");
+  const [playerInId,setPlayerInId]=useState("");
   const fixture = game.fixtures.find((item) => item.id === plan.fixtureId)!;
   const home = clubById(game, fixture.homeId);
   const away = clubById(game, fixture.awayId);
@@ -347,8 +359,30 @@ function MatchCenter({ game, plan, minute, running, speed, goalMoment, onSpeedCh
   const officialLineup = (teamId: string) => plan.engineSource === "vnext"
     ? [...selectVNextMatchPlayers(game, teamId).starters]
     : squadFor(game, teamId).filter((player) => player.starting).slice(0, 11);
-  const homePlayers = officialLineup(home.id);
-  const awayPlayers = officialLineup(away.id);
+  const displayedLineup = (teamId: string) => {
+    const lineup = officialLineup(teamId);
+    visibleEvents.filter((event) => event.teamId === teamId).forEach((event) => {
+      if (event.detail === "substitution" && event.outcome === "completed" && event.playerId && event.targetPlayerId) {
+        const index = lineup.findIndex((player) => player.id === event.playerId);
+        const incoming = game.players.find((player) => player.id === event.targetPlayerId);
+        if (index >= 0 && incoming) lineup[index] = incoming;
+      }
+      if (event.detail === "red_card" && event.playerId) {
+        const index = lineup.findIndex((player) => player.id === event.playerId);
+        if (index >= 0) lineup.splice(index, 1);
+      }
+    });
+    return lineup;
+  };
+  const homePlayers = displayedLineup(home.id);
+  const awayPlayers = displayedLineup(away.id);
+  const liveSelection = plan.engineSource === "vnext" ? selectLiveVNextPlayers(game, fixture, interventions) : null;
+  const dismissedIds = new Set(visibleEvents.filter((event) => event.detail === "red_card" && event.playerId).map((event) => event.playerId!));
+  const activePlayers = (liveSelection?.activePlayerIds ?? []).map((id) => game.players.find((player) => player.id === id)).filter((player): player is Player => !!player && !dismissedIds.has(player.id));
+  const benchPlayers = (liveSelection?.benchPlayerIds ?? []).map((id) => game.players.find((player) => player.id === id)).filter((player): player is Player => !!player);
+  const selectedOutId = activePlayers.some((player) => player.id === playerOutId) ? playerOutId : "";
+  const selectedInId = benchPlayers.some((player) => player.id === playerInId) ? playerInId : "";
+  const canCoach = plan.engineSource === "vnext" && minute > 0 && minute < plan.durationMinutes && !goalMoment;
   const phaseIndex = Math.max(0, Math.min(plan.phases.length - 1, minute - 1));
   const phase = plan.phases[phaseIndex] ?? plan.phases[0];
   const possessionClub = phase.teamId === home.id ? home : away;
@@ -384,7 +418,7 @@ function MatchCenter({ game, plan, minute, running, speed, goalMoment, onSpeedCh
       <header>
         <div><span>{competitionById(game,fixture.competitionId).name.toUpperCase()} • {fixture.stage.toUpperCase()}</span><small>{formatGameDate(fixture.date,true)} • {home.stadium}</small></div>
         <span className={`engine-badge ${plan.engineSource === "vnext" ? "vnext" : "legacy"}`}>{engineLabel}</span>
-        <button onClick={onClose} disabled={minute>0&&minute<90} aria-label="Fechar partida">×</button>
+        <button onClick={onClose} disabled={minute>0&&minute<plan.durationMinutes} aria-label="Fechar partida">×</button>
       </header>
       <section className={`live-score ${goalMoment ? "score-pulse" : ""}`}>
         <div><Crest club={home}/><strong>{home.name}</strong></div>
@@ -393,6 +427,15 @@ function MatchCenter({ game, plan, minute, running, speed, goalMoment, onSpeedCh
       </section>
       <section className="possession-readout" style={{"--possession-color":possessionClub.primary} as CSSProperties}>
         <Crest club={possessionClub} small/><span><small>{phase.zone==="ataque"?"ATAQUE PERIGOSO":phase.zone==="meio"?"CONSTRUÇÃO NO MEIO":"SAÍDA DE BOLA"}</small><strong>{possessionClub.name} com a posse{carrier?` • ${carrier.name}`:""}</strong></span><b>{phase.teamId===home.id?"ATACA →":"← ATACA"}</b>
+        {plan.engineSource==="vnext"&&minute<plan.durationMinutes&&<button className={`coach-toggle ${coachingOpen?"active":""}`} onClick={()=>setCoachingOpen((value)=>!value)} aria-expanded={coachingOpen}>ÁREA TÉCNICA <span>{interventions.length}</span></button>}
+        {coachingOpen&&plan.engineSource==="vnext"&&<div className="coach-drawer" role="region" aria-label="Decisões do treinador">
+          <header><span><small>COMANDOS AO VIVO</small><strong>Suas decisões entram somente nos próximos lances</strong></span><button onClick={()=>setCoachingOpen(false)} aria-label="Fechar área técnica">×</button></header>
+          <div className="coach-grid">
+            <section className="tactical-commands"><div><small>AJUSTE TÁTICO</small><em>aplicado a partir do próximo minuto</em></div><div>{(Object.entries(LIVE_TACTICAL_PRESETS) as [LiveTacticalPreset,(typeof LIVE_TACTICAL_PRESETS)[LiveTacticalPreset]][]).map(([key,preset])=><button key={key} disabled={!canCoach} onClick={()=>onTacticalChange(key)}><strong>{preset.label}</strong><span>{preset.summary}</span></button>)}</div></section>
+            <section className="live-substitution"><div><small>SUBSTITUIÇÃO</small><em>{liveSelection?.substitutionsUsed??0}/{liveSelection?.substitutionLimit??5} usadas</em></div><label>SAI<select aria-label="Jogador que sai" value={selectedOutId} onChange={(event)=>setPlayerOutId(event.target.value)}><option value="">Escolha quem sai</option>{activePlayers.map((player)=><option value={player.id} key={player.id}>{player.position} • {player.name} • {player.fitness}%</option>)}</select></label><label>ENTRA<select aria-label="Jogador que entra" value={selectedInId} onChange={(event)=>setPlayerInId(event.target.value)}><option value="">Escolha quem entra</option>{benchPlayers.map((player)=><option value={player.id} key={player.id}>{player.position} • {player.name} • GER {player.rating}</option>)}</select></label><button className="confirm-substitution" disabled={!canCoach||!selectedOutId||!selectedInId||(liveSelection?.substitutionsUsed??0)>=(liveSelection?.substitutionLimit??5)} onClick={()=>{if(onSubstitution(selectedOutId,selectedInId)){setPlayerOutId("");setPlayerInId("");}}}>CONFIRMAR TROCA ›</button></section>
+          </div>
+          <footer><span>{coachingStatus}</span><b>{interventions.length} DECISÃO(ÕES) REGISTRADA(S)</b></footer>
+        </div>}
       </section>
       <section className="match-body">
         <div className="pitch-column">
@@ -422,7 +465,7 @@ function MatchCenter({ game, plan, minute, running, speed, goalMoment, onSpeedCh
       </section>
       <footer>
         <div className="match-stat"><span>POSSE</span><b>{plan.homePossession}%</b><i><em style={{width:`${plan.homePossession}%`}}/></i><b>{100-plan.homePossession}%</b></div>
-        <div className="match-stat"><span>FINALIZAÇÕES</span><b>{Math.round(plan.homeShots*minute/90)}</b><i><em style={{width:`${plan.homeShots/shotTotal*100}%`}}/></i><b>{Math.round(plan.awayShots*minute/90)}</b></div>
+        <div className="match-stat"><span>FINALIZAÇÕES</span><b>{Math.round(plan.homeShots*minute/plan.durationMinutes)}</b><i><em style={{width:`${plan.homeShots/shotTotal*100}%`}}/></i><b>{Math.round(plan.awayShots*minute/plan.durationMinutes)}</b></div>
         <div className="live-detail"><span>ESCANTEIOS <b>{visibleCorners.filter((event)=>event.teamId===home.id).length} — {visibleCorners.filter((event)=>event.teamId===away.id).length}</b></span><span>CARTÕES <b>{visibleCards.filter((event)=>event.teamId===home.id).length} — {visibleCards.filter((event)=>event.teamId===away.id).length}</b></span></div>
         <div className="match-controls">{minute<plan.durationMinutes&&<div className="speed-controls" aria-label="Velocidade da partida">{(["Lenta","Normal","Rápida","Ultra"] as const).map((option)=><button className={speed===option?"active":""} onClick={()=>onSpeedChange(option)} key={option}>{option}</button>)}</div>}{minute<plan.durationMinutes?<><button className="secondary-button" onClick={onToggle}>{running?"PAUSAR":"CONTINUAR"}</button><button className="primary-button" onClick={onSkip}>IR AO FIM ›</button></>:<button className="primary-button" onClick={onFinish}>VOLTAR AO VESTIÁRIO ›</button>}</div>
       </footer>
@@ -442,7 +485,7 @@ function CareerModal({ game, careers, onClose, onSelect, onCreate, onDelete, onI
 }
 
 export default function Home() {
-  const [careers,setCareers]=useState<GameState[]>([]); const [activeId,setActiveId]=useState(""); const [section,setSection]=useState("Visão geral"); const [ready,setReady]=useState(false); const [careerModal,setCareerModal]=useState(false); const [mobileMenu,setMobileMenu]=useState(false); const [matchPlan,setMatchPlan]=useState<MatchPlan|null>(null); const [minute,setMinute]=useState(0); const [running,setRunning]=useState(false); const [matchSpeed,setMatchSpeed]=useState<"Lenta"|"Normal"|"Rápida"|"Ultra">("Normal"); const [goalMoment,setGoalMoment]=useState<MatchEvent|null>(null); const [goalQueue,setGoalQueue]=useState<MatchEvent[]>([]); const seenGoalsRef=useRef(new Set<string>()); const game=careers.find((career)=>career.id===activeId)??careers[0];
+  const [careers,setCareers]=useState<GameState[]>([]); const [activeId,setActiveId]=useState(""); const [section,setSection]=useState("Visão geral"); const [ready,setReady]=useState(false); const [careerModal,setCareerModal]=useState(false); const [mobileMenu,setMobileMenu]=useState(false); const [matchPlan,setMatchPlan]=useState<MatchPlan|null>(null); const [matchInterventions,setMatchInterventions]=useState<MatchIntervention[]>([]); const [coachingStatus,setCoachingStatus]=useState("Escolha um comando quando quiser mudar o rumo dos próximos lances."); const [minute,setMinute]=useState(0); const [running,setRunning]=useState(false); const [matchSpeed,setMatchSpeed]=useState<"Lenta"|"Normal"|"Rápida"|"Ultra">("Normal"); const [goalMoment,setGoalMoment]=useState<MatchEvent|null>(null); const [goalQueue,setGoalQueue]=useState<MatchEvent[]>([]); const seenGoalsRef=useRef(new Set<string>()); const game=careers.find((career)=>career.id===activeId)??careers[0];
 
   useEffect(()=>{let cancelled=false;const frame=window.requestAnimationFrame(()=>{void(async()=>{try{const persisted=await loadCareerState();const stored=localStorage.getItem(STORAGE_KEY)??localStorage.getItem(LEGACY_STORAGE_KEY),legacy=stored?JSON.parse(stored) as unknown[]:[],source=persisted?.careers?.length?persisted.careers:legacy;if(cancelled)return;if(source.length){const migrated=source.map(migrateGame);setCareers(migrated);setActiveId(persisted?.activeId??localStorage.getItem(ACTIVE_KEY)??localStorage.getItem(LEGACY_ACTIVE_KEY)??migrated[0].id);}else{const first=createNewGame();setCareers([first]);setActiveId(first.id);}}catch{if(cancelled)return;const first=createNewGame();setCareers([first]);setActiveId(first.id);}if(!cancelled)setReady(true);})()});return()=>{cancelled=true;window.cancelAnimationFrame(frame);};},[]);
   useEffect(()=>{if(!ready||!careers.length)return;void saveCareerState({careers,activeId}).catch(()=>undefined);},[careers,activeId,ready]);
@@ -471,8 +514,21 @@ export default function Home() {
 
   const update=(next:GameState)=>setCareers((items)=>items.map((item)=>item.id===game.id?{...next,lastSavedAt:new Date().toISOString()}:item));
   const resetGoalPresentation=()=>{seenGoalsRef.current=new Set();setGoalMoment(null);setGoalQueue([]);};
-  const beginMatch=()=>{if(game.managerStatus==="unemployed"){setSection("Carreira");return;}const fixture=nextUserFixture(game);if(!fixture)return;resetGoalPresentation();setMatchPlan(buildMatchPlan(game,fixture));setMinute(0);setRunning(true);};
-  const finishMatch=()=>{if(!matchPlan)return;update(finishRound(game,matchPlan));setMatchPlan(null);setMinute(0);setRunning(false);resetGoalPresentation();setSection("Visão geral");};
+  const resetCoaching=()=>{setMatchInterventions([]);setCoachingStatus("Escolha um comando quando quiser mudar o rumo dos próximos lances.");};
+  const beginMatch=()=>{if(game.managerStatus==="unemployed"){setSection("Carreira");return;}const fixture=nextUserFixture(game);if(!fixture)return;resetGoalPresentation();resetCoaching();setMatchPlan(buildMatchPlan(game,fixture));setMinute(0);setRunning(true);};
+  const finishMatch=()=>{if(!matchPlan)return;update(finishRound(game,matchPlan));setMatchPlan(null);setMinute(0);setRunning(false);resetGoalPresentation();resetCoaching();setSection("Visão geral");};
+  const commitLiveIntervention=(intervention:MatchIntervention,message:string)=>{
+    if(!matchPlan)return false;
+    const fixture=game.fixtures.find((item)=>item.id===matchPlan.fixtureId);
+    if(!fixture)return false;
+    const nextInterventions=[...matchInterventions,intervention];
+    const nextPlan=buildMatchPlan(game,fixture,nextInterventions);
+    if(nextPlan.engineSource!=="vnext")throw new Error(nextPlan.shadow?.failureReason??"O motor não aceitou essa decisão ao vivo.");
+    if(!matchPlanPrefixIsStable(matchPlan,nextPlan,minute))throw new Error("A decisão tentou alterar um lance que já tinha sido revelado.");
+    setMatchInterventions(nextInterventions);setMatchPlan(nextPlan);setRunning(false);setCoachingStatus(`${minute}' • ${message} O relógio foi pausado para você conferir.`);return true;
+  };
+  const applyLiveTactic=(preset:LiveTacticalPreset)=>{try{if(!matchPlan)return false;const fixture=game.fixtures.find((item)=>item.id===matchPlan.fixtureId);if(!fixture)return false;const intervention=createLiveTacticalIntervention(game,fixture,matchInterventions,minute,preset);return commitLiveIntervention(intervention,`${LIVE_TACTICAL_PRESETS[preset].label} confirmado.`);}catch(error){setRunning(false);setCoachingStatus(error instanceof Error?error.message:"Não foi possível aplicar o comando.");return false;}};
+  const applyLiveSubstitution=(playerOutId:string,playerInId:string)=>{try{if(!matchPlan)return false;const fixture=game.fixtures.find((item)=>item.id===matchPlan.fixtureId);if(!fixture)return false;const outgoing=game.players.find((player)=>player.id===playerOutId),incoming=game.players.find((player)=>player.id===playerInId);const intervention=createLiveSubstitutionIntervention(game,fixture,matchInterventions,minute,playerOutId,playerInId);return commitLiveIntervention(intervention,`${incoming?.name??"O reserva"} entrará no lugar de ${outgoing?.name??"o titular"}.`);}catch(error){setRunning(false);setCoachingStatus(error instanceof Error?error.message:"Não foi possível confirmar a substituição.");return false;}};
   const createCareer=(manager:string,club:string|undefined,name:string)=>{const next={...createNewGame(manager,club,name),id:`career-${Date.now()}`};setCareers((items)=>[...items,next]);setActiveId(next.id);setCareerModal(false);setSection("Visão geral");};
   const importCareer=(next:GameState)=>{setCareers((items)=>[...items,next]);setActiveId(next.id);};
   const currentClub=userClub(game); const unread=game.news.filter((item)=>item.unread).length;
@@ -506,7 +562,7 @@ export default function Home() {
       </section>
 
       {matchPlan && (
-        <MatchCenter game={game} plan={matchPlan} minute={minute} running={running} speed={matchSpeed} goalMoment={goalMoment} onSpeedChange={setMatchSpeed} onToggle={()=>setRunning((value)=>!value)} onSkip={()=>{resetGoalPresentation();setMinute(matchPlan.durationMinutes);setRunning(false);}} onFinish={finishMatch} onClose={()=>{if(minute===0||minute>=matchPlan.durationMinutes){setMatchPlan(null);setRunning(false);resetGoalPresentation();}}}/>
+        <MatchCenter game={game} plan={matchPlan} minute={minute} running={running} speed={matchSpeed} goalMoment={goalMoment} interventions={matchInterventions} coachingStatus={coachingStatus} onSpeedChange={setMatchSpeed} onToggle={()=>setRunning((value)=>!value)} onTacticalChange={applyLiveTactic} onSubstitution={applyLiveSubstitution} onSkip={()=>{resetGoalPresentation();setMinute(matchPlan.durationMinutes);setRunning(false);}} onFinish={finishMatch} onClose={()=>{if(minute===0||minute>=matchPlan.durationMinutes){setMatchPlan(null);setRunning(false);resetGoalPresentation();resetCoaching();}}}/>
       )}
       {careerModal && (
         <CareerModal game={game} careers={careers} onClose={()=>setCareerModal(false)} onSelect={(id)=>{setActiveId(id);setSection("Visão geral");setCareerModal(false);}} onCreate={createCareer} onDelete={(id)=>setCareers((items)=>items.filter((item)=>item.id!==id))} onImport={importCareer} onSync={update}/>
