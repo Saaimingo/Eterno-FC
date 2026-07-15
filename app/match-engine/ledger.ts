@@ -8,6 +8,8 @@ import type {
   Score,
 } from "./contracts";
 
+const MAX_EVENT_CLOCK_MS = 7_200_000;
+
 export type EventDraft = Readonly<{
   clockMs: number;
   period: MatchPeriod;
@@ -65,7 +67,7 @@ export class EventLedger {
 
   append(draft: EventDraft) {
     if (this.#closed) throw new Error("Não é permitido registrar eventos após match_end.");
-    if (!Number.isInteger(draft.clockMs) || draft.clockMs < 0 || draft.clockMs > 5_400_000) {
+    if (!Number.isInteger(draft.clockMs) || draft.clockMs < 0 || draft.clockMs > MAX_EVENT_CLOCK_MS) {
       throw new Error("Relógio de evento inválido.");
     }
     if (draft.teamId !== null && draft.teamId !== this.homeTeamId && draft.teamId !== this.awayTeamId) {
@@ -134,8 +136,12 @@ export class EventLedger {
     const finalEvent = this.#events.at(-1);
     if (finalEvent?.type !== "match_end") throw new Error("Ledger sem encerramento de partida.");
     const periodEnds = this.#events.filter((event) => event.type === "period_end");
-    if (periodEnds.length !== 2 || periodEnds[0].period !== 1 || periodEnds[1].period !== 2) {
-      throw new Error("Ledger sem encerramento válido dos dois períodos.");
+    const endedPeriods = periodEnds.map((event) => event.period);
+    const regulation = endedPeriods.length === 2 && endedPeriods[0] === 1 && endedPeriods[1] === 2;
+    const extraTime = endedPeriods.length === 4
+      && endedPeriods.every((period, index) => period === index + 1);
+    if (!regulation && !extraTime) {
+      throw new Error("Ledger sem encerramento válido dos períodos disputados.");
     }
   }
 }
@@ -235,8 +241,17 @@ export function assertLedgerInvariants(
     if (event.type === "stoppage_time" && event.causes.length !== 1) {
       throw new Error("stoppage_time deve ter exatamente uma causa anterior.");
     }
-    if (event.type === "match_end" && !causeTypes.includes("period_end")) {
-      throw new Error("match_end deve ser causado por period_end.");
+    if (event.type === "shootout_kick"
+      && (!event.teamId || !event.actorId || !event.targetId || event.causes.length !== 1)) {
+      throw new Error("shootout_kick deve identificar equipe, cobrador, goleiro e uma causa anterior.");
+    }
+    if (event.type === "shootout_end"
+      && (!event.teamId || event.causes.length !== 1 || !causeTypes.includes("shootout_kick"))) {
+      throw new Error("shootout_end deve identificar o vencedor e nascer da última cobrança.");
+    }
+    if (event.type === "match_end"
+      && !causeTypes.some((type) => type === "period_end" || type === "shootout_end")) {
+      throw new Error("match_end deve ser causado pelo fim de um período ou da disputa por pênaltis.");
     }
 
     const expectedAfter: Score = event.type === "goal"
