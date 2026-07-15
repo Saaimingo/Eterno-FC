@@ -1,4 +1,4 @@
-# Motor de partida vNext — MP-0 a MP-7
+# Motor de partida vNext — MP-0 a MP-8
 
 Este diretório contém o novo núcleo causal do Eterno FC. Desde o MP-6, ele decide partidas elegíveis da carreira do usuário e alimenta diretamente o campinho 2D, a narração, as estatísticas e o placar.
 
@@ -37,6 +37,8 @@ Este diretório contém o novo núcleo causal do Eterno FC. Desde o MP-6, ele de
 - acréscimos calculados por incidentes e convertidos em posses extras auditáveis;
 - prorrogação com dois períodos de 15 minutos e disputa por pênaltis registrada cobrança a cobrança;
 - decisão eliminatória separada do placar de jogo, sem transformar pênalti de desempate em gol oficial;
+- área técnica ao vivo com quatro comandos táticos e substituições escolhidas pelo treinador;
+- re-simulação determinística protegida por comparação do prefixo já revelado: decisão nova nunca reescreve o passado;
 - adaptador da carreira, comparação em modo sombra e portão de promoção por partida;
 - projeção da timeline canônica no campinho 2D, com portador, bola, zona e sentido do ataque;
 - narração derivada dos eventos e das relações causais, inclusive assistência;
@@ -52,6 +54,8 @@ Este diretório contém o novo núcleo causal do Eterno FC. Desde o MP-6, ele de
 O portão de promoção valida o fim do ledger, o placar, a quantidade de gols, as estatísticas e a decisão eliminatória. Quando ele passa, o placar vNext é o resultado gravado na carreira e a interface apenas o revela no tempo certo.
 
 Desde o MP-7, um empate em mata-mata de jogo único abre a prorrogação no mesmo ledger. Persistindo a igualdade, `shootout_kick` registra cada cobrador, goleiro, pressão, probabilidade e resultado; `shootout_end` confirma o classificado. O placar de jogo permanece separado do placar dos pênaltis. Saves existentes permanecem compatíveis.
+
+No MP-8, o treinador pode fechar a casa, reequilibrar, pressionar, explorar os lados ou substituir atletas durante a exibição. Cada escolha vira uma intervenção canônica agendada depois do último minuto revelado. O motor repete a mesma entrada e a mesma sequência aleatória até aquele instante, confirma que o prefixo visível permaneceu idêntico e só então troca a continuação da partida.
 
 ## Calibração
 
