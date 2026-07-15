@@ -9,7 +9,7 @@ import { REGIONAL_CUP_FORMATS_2026 } from "./rules/regional-cups-2026";
 import { BRAZIL_SUPER_CUP_2026, resolveSuperCupParticipants } from "./rules/super-cup";
 import { serieCFormatForSeason, splitSerieCAccessGroups } from "./rules/serie-c";
 import { resolveClubDateConflicts } from "./rules/calendar-conflicts";
-import { MATCH_ENGINE_VERSION } from "./match-engine";
+import { MATCH_ENGINE_VERSION, type MatchIntervention } from "./match-engine";
 import { compareShadowMatch, simulateVNextFixture } from "./match-adapter";
 import { candidateCanDriveMatch, projectVNextMatchPlan } from "./match-presentation";
 import type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, Intensity, JobVacancy, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
@@ -333,12 +333,20 @@ export function buildLegacyMatchPlan(game:GameState,fixture:Fixture):MatchPlan {
   return{fixtureId:fixture.id,engineSource:"legacy",engineVersion:"legacy-v2",homeGoals,awayGoals,durationMinutes:90,decisionMethod:homeGoals===awayGoals?"draw":"regulation",winnerTeamId:homeGoals>awayGoals?fixture.homeId:awayGoals>homeGoals?fixture.awayId:undefined,events:presentedEvents,phases,homePossession,homeShots:Math.max(homeGoals+2,7+Math.round((homeStrength-awayStrength)/5+random()*5)),awayShots:Math.max(awayGoals+2,6+Math.round((awayStrength-homeStrength)/5+random()*5)),homeCorners:0,awayCorners:0,homeCards:events.filter((event)=>event.type==="card"&&event.teamId===fixture.homeId).length,awayCards:events.filter((event)=>event.type==="card"&&event.teamId===fixture.awayId).length};
 }
 
-export function buildMatchPlan(game:GameState,fixture:Fixture):MatchPlan {
+export function buildMatchPlan(game:GameState,fixture:Fixture,interventions:readonly MatchIntervention[]=[]):MatchPlan {
   const legacy=buildLegacyMatchPlan(game,fixture);
   try{
-    const candidate=simulateVNextFixture(game,fixture),shadow=compareShadowMatch([legacy.homeGoals,legacy.awayGoals],[legacy.homeShots,legacy.awayShots],legacy.homePossession,candidate);
+    const candidate=simulateVNextFixture(game,fixture,interventions),shadow=compareShadowMatch([legacy.homeGoals,legacy.awayGoals],[legacy.homeShots,legacy.awayShots],legacy.homePossession,candidate);
     return candidateCanDriveMatch(game,fixture,candidate)?projectVNextMatchPlan(game,fixture,candidate,shadow):{...legacy,shadow};
   }catch(error){return{...legacy,shadow:{status:"failed",engineVersion:MATCH_ENGINE_VERSION,legacyScore:[legacy.homeGoals,legacy.awayGoals],failureReason:error instanceof Error?error.message:"Falha desconhecida no motor candidato."}};}
+}
+
+export function matchPlanPrefixIsStable(before:MatchPlan,after:MatchPlan,throughMinute:number){
+  const prefix=(plan:MatchPlan)=>plan.events.filter((event)=>event.minute<=throughMinute).map((event)=>({
+    id:event.id,sequence:event.sequence,minute:event.minute,minuteLabel:event.minuteLabel,type:event.type,teamId:event.teamId,
+    playerId:event.playerId,targetPlayerId:event.targetPlayerId,assistPlayerId:event.assistPlayerId,text:event.text,detail:event.detail,outcome:event.outcome,scoreAfter:event.scoreAfter,
+  }));
+  return JSON.stringify(prefix(before))===JSON.stringify(prefix(after));
 }
 
 function playFixture(game:GameState,fixture:Fixture,salt:string):Fixture{const score=scoreFixture(game,fixture,salt);return{...fixture,played:true,homeGoals:score.homeGoals,awayGoals:score.awayGoals};}

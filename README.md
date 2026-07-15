@@ -15,7 +15,7 @@ O trabalho em curso está transformando o protótipo em uma base modular, com re
 ```text
 app/
   domain/     tipos e regras fundamentais do domínio
-  match-engine/ núcleo causal e determinístico oficial (MP-0/MP-7)
+  match-engine/ núcleo causal e determinístico oficial (MP-0/MP-8)
   rules/      calendários e regulamentos por temporada
   game.ts     fachada temporária do motor em processo de divisão
   page.tsx    interface web do jogo
@@ -33,6 +33,7 @@ tests/        validações automatizadas
 - [Relatório e calibração do motor MP-0/MP-1](docs/match-engine-mp1-calibration.md)
 - [Relatório e calibração dos confrontos MP-2](docs/match-engine-mp2-calibration.md)
 - [MP-7: prorrogação e disputa por pênaltis](docs/match-engine-mp7-knockout.md)
+- [MP-8: decisões do treinador durante a partida](docs/match-engine-mp8-live-coaching.md)
 
 As demais matrizes de países estão em `docs/`.
 

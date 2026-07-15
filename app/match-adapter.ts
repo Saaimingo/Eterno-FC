@@ -11,10 +11,12 @@ import {
   MATCH_ENGINE_VERSION,
   PLAYER_ATTRIBUTE_KEYS,
   defaultRoleForPosition,
+  scheduleMatchInterventions,
   simulateMatch,
   validateMatchInput,
   type IndividualInstructions,
   type MatchInput,
+  type MatchIntervention,
   type MatchPlayer,
   type MatchPosition,
   type MatchResult,
@@ -24,8 +26,35 @@ import {
   type PlayerTrait,
   type RoleAssignment,
   type TacticalPlan,
+  type TacticalChangeIntervention,
+  type SubstitutionIntervention,
   type TeamSnapshot,
 } from "./match-engine";
+
+export const LIVE_TACTICAL_PRESETS = Object.freeze({
+  protect: Object.freeze({
+    label: "Fechar a casa",
+    summary: "Bloco baixo, menos risco e saída em contra-ataque.",
+    changes: Object.freeze({ mentality: "defensive", risk: 34, tempo: 43, width: 46, defensiveLine: 36, pressingLine: 40, pressingIntensity: 43, passingStyle: "direct", attackingFocus: "balanced", transitionStyle: "counter", creativeFreedom: 38 }),
+  }),
+  balance: Object.freeze({
+    label: "Reequilibrar",
+    summary: "Recupera distâncias e circulação sem abandonar o ataque.",
+    changes: Object.freeze({ mentality: "balanced", risk: 50, tempo: 52, width: 52, defensiveLine: 50, pressingLine: 52, pressingIntensity: 52, passingStyle: "mixed", attackingFocus: "balanced", transitionStyle: "hold", creativeFreedom: 50 }),
+  }),
+  press: Object.freeze({
+    label: "Pressão total",
+    summary: "Linha alta, ritmo forte e mais gente atacando.",
+    changes: Object.freeze({ mentality: "attacking", risk: 72, tempo: 69, width: 57, defensiveLine: 66, pressingLine: 70, pressingIntensity: 76, passingStyle: "mixed", attackingFocus: "center", transitionStyle: "balanced", creativeFreedom: 66 }),
+  }),
+  flanks: Object.freeze({
+    label: "Explorar os lados",
+    summary: "Abre o campo e procura laterais e pontas.",
+    changes: Object.freeze({ risk: 60, tempo: 61, width: 74, pressingLine: 58, pressingIntensity: 58, passingStyle: "mixed", attackingFocus: "flanks", transitionStyle: "balanced", creativeFreedom: 58 }),
+  }),
+} as const satisfies Readonly<Record<string, Readonly<{ label: string; summary: string; changes: Readonly<Partial<TacticalPlan>> }>>>);
+
+export type LiveTacticalPreset = keyof typeof LIVE_TACTICAL_PRESETS;
 
 const POSITION_MAP: Readonly<Record<Position, MatchPosition>> = Object.freeze({
   GOL: "GK",
@@ -289,7 +318,11 @@ function adaptTeam(game: GameState, teamId: string): TeamSnapshot {
   });
 }
 
-export function createVNextMatchInput(game: GameState, fixture: Fixture): MatchInput {
+export function createVNextMatchInput(
+  game: GameState,
+  fixture: Fixture,
+  interventions: readonly MatchIntervention[] = [],
+): MatchInput {
   const random = seededRandom(`${fixture.id}-referee`);
   const competition = game.competitions.find((candidate) => candidate.id === fixture.competitionId);
   const singleLegKnockout = Boolean(
@@ -298,7 +331,7 @@ export function createVNextMatchInput(game: GameState, fixture: Fixture): MatchI
       && fixture.stage !== "Fase de grupos"
       && !fixture.tieId,
   );
-  const input = Object.freeze({
+  const baseInput = Object.freeze({
     context: Object.freeze({
       matchId: fixture.id,
       competitionId: fixture.competitionId,
@@ -324,12 +357,140 @@ export function createVNextMatchInput(game: GameState, fixture: Fixture): MatchI
     away: adaptTeam(game, fixture.awayId),
     interventions: Object.freeze([]),
   }) satisfies MatchInput;
+  const input = scheduleMatchInterventions(baseInput, interventions);
   validateMatchInput(input);
   return input;
 }
 
-export function simulateVNextFixture(game: GameState, fixture: Fixture): MatchResult {
-  return simulateMatch(createVNextMatchInput(game, fixture));
+type LiveTeamState = Readonly<{
+  activePlayerIds: readonly string[];
+  benchPlayerIds: readonly string[];
+  assignments: ReadonlyMap<string, RoleAssignment>;
+  substitutionsUsed: number;
+}>;
+
+function liveTeamState(input: MatchInput, teamId: string): LiveTeamState {
+  const team = input.home.id === teamId ? input.home : input.away.id === teamId ? input.away : undefined;
+  if (!team) throw new Error("O clube treinado não participa desta partida.");
+  const active = team.players.map((player) => player.id);
+  const bench = team.bench.map((player) => player.id);
+  const assignments = new Map(team.assignments.map((assignment) => [assignment.playerId, assignment]));
+  let substitutionsUsed = 0;
+  const ordered = [...input.interventions].map((intervention, index) => ({ intervention, index }))
+    .sort((left, right) => left.intervention.clockMs - right.intervention.clockMs || left.index - right.index);
+  for (const { intervention } of ordered) {
+    if (intervention.teamId !== teamId) continue;
+    if (intervention.type === "substitution") {
+      const activeIndex = active.indexOf(intervention.playerOutId);
+      const benchIndex = bench.indexOf(intervention.playerInId);
+      if (activeIndex < 0 || benchIndex < 0) continue;
+      active[activeIndex] = intervention.playerInId;
+      bench.splice(benchIndex, 1);
+      assignments.delete(intervention.playerOutId);
+      assignments.set(intervention.playerInId, intervention.assignment);
+      substitutionsUsed += 1;
+    } else {
+      intervention.assignmentChanges.forEach((assignment) => assignments.set(assignment.playerId, assignment));
+    }
+  }
+  return Object.freeze({
+    activePlayerIds: Object.freeze(active),
+    benchPlayerIds: Object.freeze(bench),
+    assignments,
+    substitutionsUsed,
+  });
+}
+
+function managedTeam(input: MatchInput, game: GameState) {
+  if (input.home.id === game.userClubId) return input.home;
+  if (input.away.id === game.userClubId) return input.away;
+  throw new Error("O clube do treinador não participa desta partida.");
+}
+
+function interventionClock(input: MatchInput, revealedMinute: number) {
+  const maximumMinute = input.context.rules.drawResolution === "extra_time_and_penalties" ? 119 : 89;
+  return Math.floor(clamp(revealedMinute, 1, maximumMinute)) * 60_000 + 1_000;
+}
+
+export function selectLiveVNextPlayers(
+  game: GameState,
+  fixture: Fixture,
+  interventions: readonly MatchIntervention[] = [],
+) {
+  const input = createVNextMatchInput(game, fixture, interventions);
+  const state = liveTeamState(input, game.userClubId);
+  return Object.freeze({
+    activePlayerIds: state.activePlayerIds,
+    benchPlayerIds: state.benchPlayerIds,
+    substitutionsUsed: state.substitutionsUsed,
+    substitutionLimit: input.context.rules.maxSubstitutions,
+  });
+}
+
+export function createLiveTacticalIntervention(
+  game: GameState,
+  fixture: Fixture,
+  interventions: readonly MatchIntervention[],
+  revealedMinute: number,
+  preset: LiveTacticalPreset,
+): TacticalChangeIntervention {
+  const input = createVNextMatchInput(game, fixture, interventions);
+  managedTeam(input, game);
+  const intervention = Object.freeze({
+    id: `live-${fixture.id}-${interventions.length + 1}-${preset}`,
+    type: "tactical_change",
+    teamId: game.userClubId,
+    clockMs: interventionClock(input, revealedMinute),
+    changes: Object.freeze({ ...LIVE_TACTICAL_PRESETS[preset].changes }),
+    assignmentChanges: Object.freeze([]),
+  }) satisfies TacticalChangeIntervention;
+  createVNextMatchInput(game, fixture, [...interventions, intervention]);
+  return intervention;
+}
+
+export function createLiveSubstitutionIntervention(
+  game: GameState,
+  fixture: Fixture,
+  interventions: readonly MatchIntervention[],
+  revealedMinute: number,
+  playerOutId: string,
+  playerInId: string,
+): SubstitutionIntervention {
+  const input = createVNextMatchInput(game, fixture, interventions);
+  const team = managedTeam(input, game);
+  const state = liveTeamState(input, game.userClubId);
+  if (state.substitutionsUsed >= input.context.rules.maxSubstitutions) throw new Error("O limite de substituições já foi utilizado.");
+  if (!state.activePlayerIds.includes(playerOutId)) throw new Error("O jogador escolhido para sair não está mais em campo.");
+  if (!state.benchPlayerIds.includes(playerInId)) throw new Error("O jogador escolhido para entrar não está mais no banco.");
+  const outgoing = state.assignments.get(playerOutId);
+  const incoming = team.bench.find((player) => player.id === playerInId);
+  if (!outgoing || !incoming) throw new Error("Não foi possível montar a nova função da substituição.");
+  const positionalFamiliarity = incoming.positionFamiliarity[outgoing.position] ?? 0;
+  const assignment = Object.freeze({
+    ...outgoing,
+    playerId: playerInId,
+    tacticalFamiliarity: Math.round(clamp(50 + positionalFamiliarity * 0.35, 45, 88)),
+    instructions: Object.freeze({ ...outgoing.instructions }),
+  });
+  const intervention = Object.freeze({
+    id: `live-${fixture.id}-${interventions.length + 1}-sub`,
+    type: "substitution",
+    teamId: game.userClubId,
+    clockMs: interventionClock(input, revealedMinute),
+    playerOutId,
+    playerInId,
+    assignment,
+  }) satisfies SubstitutionIntervention;
+  createVNextMatchInput(game, fixture, [...interventions, intervention]);
+  return intervention;
+}
+
+export function simulateVNextFixture(
+  game: GameState,
+  fixture: Fixture,
+  interventions: readonly MatchIntervention[] = [],
+): MatchResult {
+  return simulateMatch(createVNextMatchInput(game, fixture, interventions));
 }
 
 function outcome(score: readonly [number, number]) {

@@ -1,4 +1,4 @@
-export const MATCH_ENGINE_VERSION = "0.7.0-mp7";
+export const MATCH_ENGINE_VERSION = "0.8.0-mp8";
 
 export const TECHNICAL_ATTRIBUTE_KEYS = [
   "corners",

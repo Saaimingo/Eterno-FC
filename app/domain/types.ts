@@ -200,9 +200,11 @@ export type MatchEvent = {
   type: MatchEventType;
   teamId: string;
   playerId?: string;
+  targetPlayerId?: string;
   assistPlayerId?: string;
   text: string;
   detail?: string;
+  outcome?: string;
   origin?: PitchCoordinate;
   destination?: PitchCoordinate;
   scoreAfter?: readonly [number, number];
