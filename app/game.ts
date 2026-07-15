@@ -9,6 +9,7 @@ import { REGIONAL_CUP_FORMATS_2026 } from "./rules/regional-cups-2026";
 import { BRAZIL_SUPER_CUP_2026, resolveSuperCupParticipants } from "./rules/super-cup";
 import { serieCFormatForSeason, splitSerieCAccessGroups } from "./rules/serie-c";
 import { resolveClubDateConflicts } from "./rules/calendar-conflicts";
+import { runShadowMatch } from "./match-adapter";
 import type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, Intensity, JobVacancy, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
 
 export type { BoardObjective, Club, Competition, CompetitionType, Fixture, GameState, IncomingBid, Intensity, JobVacancy, League, ManagerContract, ManagerOffer, MarketOffer, MatchEvent, MatchPhase, MatchPlan, Mentality, NewsItem, Player, PlayerAttributes, Position, Standing, TransferEvent } from "./domain/types";
@@ -316,7 +317,7 @@ function scorerFor(game:GameState,clubId:string,random:()=>number){
   return candidates[0];
 }
 
-export function buildMatchPlan(game:GameState,fixture:Fixture):MatchPlan {
+export function buildLegacyMatchPlan(game:GameState,fixture:Fixture):MatchPlan {
   const {homeGoals,awayGoals,random,homeStrength,awayStrength}=scoreFixture(game,fixture,"live");const events:MatchEvent[]=[{minute:1,type:"comment",teamId:fixture.homeId,text:"A bola está rolando."}];const used=new Set<number>();
   const addGoal=(teamId:string)=>{let minute=6+Math.floor(random()*81);while(used.has(minute))minute=Math.min(89,minute+1);used.add(minute);const scorer=scorerFor(game,teamId,random);events.push({minute,type:"goal",teamId,playerId:scorer?.id,text:`GOL! ${scorer?.name??"O atacante"} conclui a jogada.`});};
   for(let index=0;index<homeGoals;index+=1)addGoal(fixture.homeId);for(let index=0;index<awayGoals;index+=1)addGoal(fixture.awayId);
@@ -327,6 +328,20 @@ export function buildMatchPlan(game:GameState,fixture:Fixture):MatchPlan {
   events.filter((event)=>event.type==="goal"||event.type==="chance").forEach((event)=>{const phase=phases.find((item)=>event.minute>=item.start&&event.minute<=item.end);if(phase){phase.teamId=event.teamId;phase.zone="ataque";}});
   const homePossession=clamp(Math.round(50+(homeStrength-awayStrength)*1.25),34,66);
   return{fixtureId:fixture.id,homeGoals,awayGoals,events,phases,homePossession,homeShots:Math.max(homeGoals+2,7+Math.round((homeStrength-awayStrength)/5+random()*5)),awayShots:Math.max(awayGoals+2,6+Math.round((awayStrength-homeStrength)/5+random()*5))};
+}
+
+export function buildMatchPlan(game:GameState,fixture:Fixture):MatchPlan {
+  const legacy=buildLegacyMatchPlan(game,fixture);
+  return{
+    ...legacy,
+    shadow:runShadowMatch(
+      game,
+      fixture,
+      [legacy.homeGoals,legacy.awayGoals],
+      [legacy.homeShots,legacy.awayShots],
+      legacy.homePossession,
+    ),
+  };
 }
 
 function playFixture(game:GameState,fixture:Fixture,salt:string):Fixture{const score=scoreFixture(game,fixture,salt);return{...fixture,played:true,homeGoals:score.homeGoals,awayGoals:score.awayGoals};}

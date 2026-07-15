@@ -188,4 +188,28 @@ export type GameState = {
 
 export type MatchEvent = { minute: number; type: "goal" | "chance" | "card" | "injury" | "comment"; teamId: string; playerId?: string; text: string };
 export type MatchPhase = { start: number; end: number; teamId: string; zone: "saída" | "meio" | "ataque"; carrier: number };
-export type MatchPlan = { fixtureId: string; homeGoals: number; awayGoals: number; events: MatchEvent[]; phases: MatchPhase[]; homePossession: number; homeShots: number; awayShots: number };
+export type ShadowMatchComparison = {
+  status: "ready" | "failed";
+  engineVersion: string;
+  legacyScore: readonly [number, number];
+  candidateScore?: readonly [number, number];
+  outcomeAgreement?: boolean;
+  goalDelta?: number;
+  shotDelta?: readonly [number, number];
+  possessionDelta?: number;
+  candidateEventCount?: number;
+  candidateFingerprint?: string;
+  failureReason?: string;
+};
+
+export type MatchPlan = {
+  fixtureId: string;
+  homeGoals: number;
+  awayGoals: number;
+  events: MatchEvent[];
+  phases: MatchPhase[];
+  homePossession: number;
+  homeShots: number;
+  awayShots: number;
+  shadow?: ShadowMatchComparison;
+};
