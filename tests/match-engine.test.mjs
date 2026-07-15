@@ -50,6 +50,25 @@ test("starts and finishes an empty match with a reproducible canonical ledger", 
   assert.equal(Object.isFrozen(first.events[0]), true);
 });
 
+test("keeps even an empty knockout ledger complete through extra time and shootout", () => {
+  const input = createPrototypeMatchInput("empty-knockout");
+  const result = simulateEmptyMatch({
+    ...input,
+    context: {
+      ...input.context,
+      rules: { ...input.context.rules, drawResolution: "extra_time_and_penalties" },
+    },
+  });
+
+  assert.equal(result.decision.method, "penalties");
+  assert.equal(result.finalState.period, 5);
+  assert.ok(result.decision.winnerTeamId);
+  assert.ok(result.events.some((event) => event.type === "kickoff" && event.period === 3));
+  assert.ok(result.events.some((event) => event.type === "shootout_kick"));
+  assert.equal(result.events.at(-2).type, "shootout_end");
+  assert.equal(result.events.at(-1).type, "match_end");
+});
+
 test("replays the same match exactly from the same seed and input", () => {
   const first = simulateMatch(createPrototypeMatchInput("deterministic-replay"));
   const second = simulateMatch(createPrototypeMatchInput("deterministic-replay"));
@@ -753,11 +772,12 @@ test("makes a flank intervention measurable without turning it into a guaranteed
 
 test("validates the competition rules and referee profile introduced in MP-4", () => {
   const input = createPrototypeMatchInput("mp4-rules-contract");
-  assert.equal(MATCH_ENGINE_VERSION, "0.4.0-mp4");
+  assert.equal(MATCH_ENGINE_VERSION, "0.7.0-mp7");
   assert.equal(input.context.rules.maxSubstitutions, 5);
   assert.equal(input.context.rules.secondYellowDismissal, true);
   assert.equal(input.context.rules.offsideEnabled, true);
   assert.equal(input.context.rules.stoppageTimeEnabled, true);
+  assert.equal(input.context.rules.drawResolution, "allow_draw");
   assert.throws(
     () => validateMatchInput({
       ...input,
@@ -772,6 +792,38 @@ test("validates the competition rules and referee profile introduced in MP-4", (
     }),
     /Limite de substituições/,
   );
+});
+
+test("decides single-leg knockout draws through canonical extra time and penalties", () => {
+  const knockoutInput = (seed) => {
+    const input = createPrototypeMatchInput(seed);
+    return {
+      ...input,
+      context: {
+        ...input.context,
+        rules: { ...input.context.rules, drawResolution: "extra_time_and_penalties" },
+      },
+    };
+  };
+  const extraTime = simulateMatch(knockoutInput("mp7-6"));
+  assert.equal(extraTime.decision.method, "extra_time");
+  assert.ok(extraTime.decision.winnerTeamId);
+  assert.equal(extraTime.finalState.period, 4);
+  assert.ok(extraTime.events.some((event) => event.type === "kickoff" && event.period === 3));
+  assert.ok(extraTime.events.some((event) => event.type === "goal" && event.period >= 3));
+
+  const penalties = simulateMatch(knockoutInput("mp7-15"));
+  const kicks = penalties.events.filter((event) => event.type === "shootout_kick");
+  assert.equal(penalties.decision.method, "penalties");
+  assert.equal(penalties.finalState.period, 5);
+  assert.ok(penalties.decision.winnerTeamId);
+  assert.ok(penalties.decision.shootoutScore);
+  assert.notEqual(penalties.decision.shootoutScore[0], penalties.decision.shootoutScore[1]);
+  assert.ok(kicks.length >= 6);
+  assert.ok(kicks.every((event) => event.scoreAfter[0] === penalties.finalState.score[0]
+    && event.scoreAfter[1] === penalties.finalState.score[1]));
+  assert.equal(penalties.events.at(-2).type, "shootout_end");
+  assert.equal(penalties.events.at(-1).type, "match_end");
 });
 
 test("records fouls, discipline, offsides, set pieces, rebounds and stoppage time canonically", () => {
